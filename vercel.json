@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://stock-ledger-j5us.onrender.com/api/:path*" }
+  ]
+}
