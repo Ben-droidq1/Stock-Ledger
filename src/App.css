@@ -2452,6 +2452,9 @@ tbody tr:last-child td {
   .account-shop-row > .button,
   .current-shop-label { margin-left: auto; }
   .analytics-metric > strong { font-size: 16px; }
+  .admin-snapshot { padding: 14px; }
+  .admin-snapshot-metrics > div { padding-inline: 7px; }
+  .admin-snapshot-metrics span { font-size: 8px; }
   .access-note { padding: 12px; }
   .conversion-product-row,
   .stock-entry-row { flex-wrap: wrap; padding-inline: 12px; }
@@ -2474,70 +2477,45 @@ tbody tr:last-child td {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-.platform-admin-layout {
+.admin-snapshot {
   display: grid;
-  gap: 15px;
+  grid-column: 1 / -1;
+  gap: 14px;
+  padding: 17px;
 }
 
-.admin-stat-grid {
+.admin-shield {
+  color: #5b8666;
+}
+
+.admin-snapshot-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 11px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-block: 1px solid #edf0eb;
 }
 
-.admin-stat {
+.admin-snapshot-metrics > div {
   display: grid;
-  min-height: 89px;
-  align-content: space-between;
-  padding: 14px;
+  gap: 4px;
+  padding: 11px 13px;
+  border-right: 1px solid #edf0eb;
 }
 
-.admin-stat > span {
-  color: #7f8b82;
-  font-size: 10px;
-}
+.admin-snapshot-metrics > div:first-child { padding-left: 0; }
+.admin-snapshot-metrics > div:last-child { border-right: 0; }
 
-.admin-stat > strong {
+.admin-snapshot-metrics strong {
   color: #2e493a;
-  font: 400 24px/1 'DM Serif Display', Georgia, serif;
+  font: 400 21px/1 'DM Serif Display', Georgia, serif;
 }
 
-.platform-user-panel,
-.platform-shop-panel {
-  overflow: hidden;
-}
-
-.platform-user-panel table {
-  min-width: 680px;
-}
-
-.platform-shop-panel table {
-  min-width: 520px;
-}
-
-.platform-status {
-  display: inline-flex;
-  padding: 4px 7px;
-  border-radius: 12px;
+.admin-snapshot-metrics span {
+  color: #7f8b82;
   font-size: 9px;
 }
 
-.platform-active {
-  color: #467352;
-  background: #e5f1e6;
-}
-
-.platform-disabled {
-  color: #8d625b;
-  background: #f6e8e3;
-}
-
-@media (max-width: 860px) {
-  .admin-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
-@media (max-width: 640px) {
-  .admin-stat-grid { gap: 8px; }
-  .admin-stat { min-height: 78px; padding: 11px; }
-  .admin-stat > strong { font-size: 21px; }
+.admin-snapshot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
 }

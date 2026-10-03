@@ -11,8 +11,6 @@ import { convertQuantity, validateUnitEdges } from './src/unitConversions.js'
 const port = Number(process.env.API_PORT || 3001)
 const databasePath = process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'shops.sqlite')
 const jwtSecret = process.env.JWT_SECRET || 'local-development-secret-change-before-deploy'
-const platformAdminEmails = new Set((process.env.PLATFORM_ADMIN_EMAILS || '')
-  .split(',').map((email) => email.trim().toLocaleLowerCase()).filter(Boolean))
 
 if (process.env.NODE_ENV === 'production' && (
   !process.env.JWT_SECRET ||
@@ -42,7 +40,6 @@ db.exec(`
     active INTEGER NOT NULL DEFAULT 1,
     must_change_password INTEGER NOT NULL DEFAULT 0,
     removed_at TEXT,
-    last_login_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE TABLE IF NOT EXISTS user_shops (
@@ -123,9 +120,6 @@ db.prepare(`
 
 if (!db.pragma('table_info(items)').some((column) => column.name === 'stock_unit')) {
   db.exec("ALTER TABLE items ADD COLUMN stock_unit TEXT NOT NULL DEFAULT 'unit'")
-}
-if (!db.pragma('table_info(users)').some((column) => column.name === 'last_login_at')) {
-  db.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT')
 }
 
 const app = express()
@@ -246,7 +240,6 @@ const cleanUser = (user) => ({
   role: user.role,
   active: Boolean(user.active),
   must_change_password: Boolean(user.must_change_password),
-  is_platform_admin: platformAdminEmails.has(user.email.toLocaleLowerCase()),
 })
 
 const membershipFor = (userId, shopId) => db.prepare(`
@@ -306,7 +299,6 @@ app.post('/api/auth/login', loginLimiter, asyncRoute(async (req, res) => {
   if (membership && user.shop_id !== membership.shop_id) {
     db.prepare('UPDATE users SET shop_id = ?, role = ? WHERE id = ?').run(membership.shop_id, membership.role, user.id)
   }
-  db.prepare('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?').run(user.id)
   res.json({ token: issueToken(sessionUser), user: cleanUser(sessionUser) })
 }))
 
@@ -338,13 +330,6 @@ const requireOwner = (req, res, next) => {
   next()
 }
 
-const requirePlatformAdmin = (req, res, next) => {
-  if (!platformAdminEmails.has(req.user.email.toLocaleLowerCase())) {
-    return next(new HttpError(403, 'Platform admin access required'))
-  }
-  next()
-}
-
 const requireReady = (req, res, next) => {
   if (req.user.must_change_password && req.path !== '/auth/change-password' && req.path !== '/auth/me') {
     return next(new HttpError(428, 'Change your temporary password to continue'))
@@ -359,36 +344,6 @@ app.get('/api/auth/me', (req, res) => {
     ? db.prepare('SELECT id, name, currency FROM shops WHERE id = ?').get(req.user.shop_id)
     : null
   res.json({ user: cleanUser(req.user), shop })
-})
-
-app.get('/api/platform/admin/overview', requirePlatformAdmin, (req, res) => {
-  const summary = {
-    accounts: db.prepare('SELECT COUNT(*) AS count FROM users WHERE removed_at IS NULL').get().count,
-    shops: db.prepare('SELECT COUNT(*) AS count FROM shops').get().count,
-    activeMemberships: db.prepare(`
-      SELECT COUNT(*) AS count FROM user_shops WHERE active = 1 AND removed_at IS NULL
-    `).get().count,
-    loginsLast30Days: db.prepare(`
-      SELECT COUNT(*) AS count FROM users
-      WHERE last_login_at >= datetime('now', '-30 days') AND removed_at IS NULL
-    `).get().count,
-  }
-  const users = db.prepare(`
-    SELECT users.id, users.email, users.created_at, users.last_login_at,
-      users.active,
-      (SELECT COUNT(*) FROM user_shops
-        WHERE user_id = users.id AND active = 1 AND removed_at IS NULL) AS shop_count
-    FROM users WHERE users.removed_at IS NULL
-    ORDER BY COALESCE(users.last_login_at, users.created_at) DESC LIMIT 100
-  `).all().map((user) => ({ ...user, active: Boolean(user.active) }))
-  const shops = db.prepare(`
-    SELECT shops.id, shops.name, shops.currency, shops.created_at,
-      (SELECT COUNT(*) FROM user_shops
-        WHERE shop_id = shops.id AND active = 1 AND removed_at IS NULL) AS member_count,
-      (SELECT COUNT(*) FROM items WHERE shop_id = shops.id AND active = 1) AS item_count
-    FROM shops ORDER BY shops.created_at DESC LIMIT 100
-  `).all()
-  res.json({ summary, users, shops })
 })
 
 app.post('/api/auth/change-password', asyncRoute(async (req, res) => {

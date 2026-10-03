@@ -53,9 +53,6 @@ const navGroups = [
     { id: 'settings', label: 'Settings', icon: Ruler },
     { id: 'account', label: 'Account', icon: BriefcaseBusiness },
   ] },
-  { label: 'Platform', links: [
-    { id: 'platform-admin', label: 'Platform admin', icon: ShieldCheck, platformAdmin: true },
-  ] },
 ]
 
 function Field({ label, ...props }) {
@@ -139,7 +136,6 @@ function App() {
   const [mobileNav, setMobileNav] = useState(false)
 
   const isOwner = user?.role === 'owner'
-  const isPlatformAdmin = Boolean(user?.is_platform_admin)
 
   useEffect(() => {
     const interval = window.setInterval(() => setCurrentDate(new Date()), 60_000)
@@ -151,7 +147,7 @@ function App() {
     apiRequest(token, '/auth/me').then(({ user: currentUser, shop: currentShop }) => {
       setUser(currentUser)
       setShop(currentShop)
-      setPage(currentUser.is_platform_admin ? 'platform-admin' : currentUser.role === 'employee' ? 'inventory' : 'dashboard')
+      setPage(currentUser.role === 'employee' ? 'inventory' : 'dashboard')
       setLoading(false)
     }).catch(() => {
       localStorage.removeItem('ledger_token')
@@ -163,16 +159,7 @@ function App() {
   }, [token])
 
   useEffect(() => {
-    if (!token || !user || user.must_change_password) return
-    if (page === 'platform-admin') {
-      if (!isPlatformAdmin) return
-      apiRequest(token, '/platform/admin/overview').then((overview) => {
-        setData((current) => ({ ...current, platformAdminOverview: overview }))
-        setError('')
-      }).catch((requestError) => setError(requestError.message))
-      return
-    }
-    if (!user.shop_id) return
+    if (!token || !user?.shop_id || user.must_change_password) return
     if (page === 'sales' && !isOwner) return
     if (page === 'settings') {
       const requests = [apiRequest(token, '/unit-conversions')]
@@ -212,7 +199,7 @@ function App() {
       setData((current) => ({ ...current, [key]: result[key] ?? result }))
       setError('')
     }).catch((requestError) => setError(requestError.message))
-  }, [token, user, page, isOwner, isPlatformAdmin])
+  }, [token, user, page, isOwner])
 
   useEffect(() => {
     if (!notice) return undefined
@@ -242,7 +229,7 @@ function App() {
       const current = await apiRequest(result.token, '/auth/me')
       setUser(current.user)
       setShop(current.shop)
-      setPage(current.user.is_platform_admin ? 'platform-admin' : current.user.role === 'employee' ? 'inventory' : 'dashboard')
+      setPage(current.user.role === 'employee' ? 'inventory' : 'dashboard')
     } catch (requestError) {
       localStorage.removeItem('ledger_token')
       setToken(null)
@@ -297,7 +284,7 @@ function App() {
     } catch { /* The form keeps the API error visible. */ }
   }} error={error} busy={busy} signOut={signOut} />
 
-  if ((!user.shop_id || !shop) && !(isPlatformAdmin && page === 'platform-admin')) return <ShopSetup onCreate={createShop} error={error} busy={busy} signOut={signOut} />
+  if (!user.shop_id || !shop) return <ShopSetup onCreate={createShop} error={error} busy={busy} signOut={signOut} />
 
   const pageTitle = {
     dashboard: [currentDate.getHours() < 12 ? 'Good morning' : currentDate.getHours() < 17 ? 'Good afternoon' : 'Good evening', 'A little overview of how things are moving.'],
@@ -307,7 +294,6 @@ function App() {
     reports: ['Reports', 'A closer look at your shop’s performance.'],
     settings: ['Settings', 'Manage the people who can access your shop.'],
     account: ['Account', 'Manage your shops, access, and team.'],
-    'platform-admin': ['Platform admin', 'Monitor accounts, shop memberships, and recent activity.'],
   }[page] || ['Inventory', 'Keep track of what’s on your shelves.']
 
   async function refresh() {
@@ -340,20 +326,20 @@ function App() {
     {mobileNav && <button aria-label="Close navigation" className="nav-scrim" onClick={() => setMobileNav(false)} />}
     <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}>
       <div className="sidebar-brand"><span className="brand-mark"><ShoppingBag size={18} /></span><span>Stock <span className="brand-dot">Ledger.</span></span><button className="icon-button mobile-close" aria-label="Close navigation" onClick={() => setMobileNav(false)}><X size={18} /></button></div>
-      {shop && <div className="shop-switcher"><span className="shop-avatar">{shop.name.slice(0, 1).toUpperCase()}</span><span className="shop-switch-info"><strong>{shop.name}</strong><small>{isOwner ? 'Owner workspace' : 'Team workspace'}</small></span><ChevronDown size={15} /></div>}
+      <div className="shop-switcher"><span className="shop-avatar">{shop.name.slice(0, 1).toUpperCase()}</span><span className="shop-switch-info"><strong>{shop.name}</strong><small>{isOwner ? 'Owner workspace' : 'Team workspace'}</small></span><ChevronDown size={15} /></div>
       <nav className="side-nav" aria-label="Main navigation">
-        {navGroups.map((group) => <div className="nav-group" key={group.label}><span className="nav-label">{group.label}</span>{group.links.filter((link) => link.platformAdmin ? isPlatformAdmin : Boolean(user.shop_id) && (isOwner || !link.owner)).map(({ id, label, icon: Icon }) => <button key={id} className={`nav-link ${page === id ? 'nav-active' : ''}`} onClick={() => { setPage(id); setMobileNav(false); setQuery('') }}><Icon size={17} strokeWidth={1.8} /><span>{label}</span>{id === 'inventory' && data.items.some((item) => item.quantity < 5) && <span className="nav-alert" />}</button>)}</div>)}
+        {navGroups.map((group) => <div className="nav-group" key={group.label}><span className="nav-label">{group.label}</span>{group.links.filter((link) => isOwner || !link.owner).map(({ id, label, icon: Icon }) => <button key={id} className={`nav-link ${page === id ? 'nav-active' : ''}`} onClick={() => { setPage(id); setMobileNav(false); setQuery('') }}><Icon size={17} strokeWidth={1.8} /><span>{label}</span>{id === 'inventory' && data.items.some((item) => item.quantity < 5) && <span className="nav-alert" />}</button>)}</div>)}
       </nav>
       <div className="sidebar-bottom">
         <div className="sidebar-help"><span className="help-icon"><CircleHelp size={16} /></span><div><strong>Need a hand?</strong><small>We’re here to help.</small></div><ArrowRight size={14} /></div>
-        <button className="profile-row" onClick={signOut}><span className="profile-avatar">{initials(user.email)}</span><span className="profile-info"><strong>{user.email.split('@')[0]}</strong><small>{isPlatformAdmin && !shop ? 'Platform admin' : isOwner ? 'Owner' : 'Employee'}</small></span><LogOut size={15} className="logout-icon" /><span className="sr-only">Sign out</span></button>
+        <button className="profile-row" onClick={signOut}><span className="profile-avatar">{initials(user.email)}</span><span className="profile-info"><strong>{user.email.split('@')[0]}</strong><small>{isOwner ? 'Owner' : 'Employee'}</small></span><LogOut size={15} className="logout-icon" /><span className="sr-only">Sign out</span></button>
       </div>
     </aside>
 
     <main className="main-area">
       <header className="topbar"><div className="topbar-left"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={19} /></button><span className="crumb-muted">Workspace</span><span className="crumb-divider">/</span><span className="crumb-current">{pageTitle[0]}</span></div><div className="topbar-right"><span className="today-label"><Clock3 size={14} /> {currentDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</span><span className="top-avatar">{initials(user.email)}</span></div></header>
       <div className="page-content">
-        <div className="page-heading"><div><div className="eyebrow">{shop?.name.toUpperCase() || 'PLATFORM ADMINISTRATION'}</div><h1>{pageTitle[0]}{page === 'dashboard' && <span className="heading-dot">.</span>}</h1><p>{pageTitle[1]}</p></div>{page === 'inventory' && <button className="button button-primary" onClick={() => setDialog({ type: 'item' })}><Plus size={16} /> Add item</button>}{page === 'expenses' && isOwner && <button className="button button-primary" onClick={() => setDialog({ type: 'expense' })}><Plus size={16} /> Add expense</button>}</div>
+        <div className="page-heading"><div><div className="eyebrow">{shop.name.toUpperCase()}</div><h1>{pageTitle[0]}{page === 'dashboard' && <span className="heading-dot">.</span>}</h1><p>{pageTitle[1]}</p></div>{page === 'inventory' && <button className="button button-primary" onClick={() => setDialog({ type: 'item' })}><Plus size={16} /> Add item</button>}{page === 'expenses' && isOwner && <button className="button button-primary" onClick={() => setDialog({ type: 'expense' })}><Plus size={16} /> Add expense</button>}</div>
         {error && <div className="alert-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setError('')}><X size={15} /></button></div>}
         {page === 'dashboard' && isOwner && <Dashboard dashboard={data.dashboard} currency={shop.currency} today={currentDate} onGo={setPage} />}
         {page === 'inventory' && <><Inventory items={filteredItems} currency={shop.currency} isOwner={isOwner} query={query} setQuery={setQuery} onAdd={() => setDialog({ type: 'item' })} onEdit={(item) => setDialog({ type: 'item', item })} onDelete={(item) => setDialog({ type: 'delete-item', item })} /><InventoryUnitTools items={data.items} onAddStock={(item) => setDialog({ type: 'add-stock', item })} onDefineUnits={(item) => setDialog({ type: 'unit-profile', item, firstSetup: true })} onEdit={(item) => setDialog({ type: 'item', item })} isOwner={isOwner} /></>}
@@ -365,8 +351,6 @@ function App() {
         {page === 'reports' && isOwner && <Reports report={data.reports} currency={shop.currency} />}
         {page === 'settings' && <SettingsPage items={data.unitItems} onEditUnits={(item) => setDialog({ type: 'unit-profile', item })} onSetupUnits={(item) => setDialog({ type: 'unit-profile', item, firstSetup: true })} />}
         {page === 'account' && <AccountPage user={user} shops={data.accountShops} isOwner={isOwner} employees={data.employees} busy={busy} error={error} onCreateShop={createShop} onSelectShop={selectShop} onAddEmployee={() => setDialog({ type: 'employee' })} onToggleEmployee={(employee) => saveAndRefresh(`/team/${employee.id}/status`, { method: 'PATCH', body: JSON.stringify({ active: !employee.active }) }, employee.active ? 'Employee disabled' : 'Employee enabled')} onResetEmployee={(employee) => setDialog({ type: 'reset-password', employee })} onRemoveEmployee={(employee) => setDialog({ type: 'remove-employee', employee })} />}
-        {page === 'platform-admin' && isPlatformAdmin && <PlatformAdminPage overview={data.platformAdminOverview} />}
-        {page === 'platform-admin' && isPlatformAdmin && <PlatformAdminPage overview={data.platformAdminOverview} />}
       </div>
     </main>
 
@@ -398,6 +382,7 @@ function PasswordSetup({ onSubmit, error, busy, signOut }) {
     <section className="metric-grid"><Metric label="Total revenue" value={formatMoney(stats.revenue, currency)} detail={`${stats.sale_count || 0} completed sales`} icon={TrendingUp} tone="green" /><Metric label="Net profit" value={formatMoney(stats.net_profit, currency)} detail={`After ${formatMoney(stats.expenses, currency)} in expenses`} icon={ArrowDownLeft} tone="coral" /><Metric label="Inventory value" value={formatMoney(stats.inventory_value, currency)} detail={`${stats.item_count || 0} active items`} icon={Package} tone="blue" /><Metric label="Gross profit" value={formatMoney(stats.gross_profit, currency)} detail="Before operating expenses" icon={BarChart3} tone="gold" /></section>
     <section className="panel recent-panel"><div className="panel-heading"><div><span className="eyebrow">THE LATEST</span><h2>Recent sales</h2></div><button className="text-button" onClick={() => onGo('sales')}>View all <ArrowRight size={14} /></button></div>{stats.recent_sales?.length ? <div className="recent-list">{stats.recent_sales.map((sale) => <div className="recent-row" key={sale.id}><span className="recent-icon"><ShoppingBag size={15} /></span><span className="recent-description"><strong>Sale #{String(sale.id).padStart(4, '0')}</strong><small>{sale.staff_email} · {formatDate(sale.created_at)}</small></span><strong className="recent-amount">{formatMoney(sale.total, currency)}</strong><span className="status-pill status-complete">Complete</span></div>)}</div> : <EmptyState icon={ShoppingBag} title="Your first sale is waiting" text="When something sells, you’ll see it here." action="Open inventory" onAction={() => onGo('inventory')} />}</section>
     <section className="panel quick-panel"><span className="eyebrow">QUICK ACTIONS</span><h2>Keep things moving</h2><button className="quick-link" onClick={() => onGo('inventory')}><span className="quick-icon quick-green"><Boxes size={17} /></span><span><strong>Check your stock</strong><small>See what’s on your shelves</small></span><ArrowRight size={16} /></button><button className="quick-link" onClick={() => onGo('expenses')}><span className="quick-icon quick-coral"><CreditCard size={17} /></span><span><strong>Log an expense</strong><small>Keep your numbers current</small></span><ArrowRight size={16} /></button><button className="quick-link" onClick={() => onGo('settings')}><span className="quick-icon quick-blue"><Users size={17} /></span><span><strong>Manage your team</strong><small>People with shop access</small></span><ArrowRight size={16} /></button></section>
+    <section className="panel admin-snapshot"><div className="panel-heading"><div><span className="eyebrow">ADMIN SNAPSHOT</span><h2>Shop operations</h2></div><ShieldCheck size={17} className="admin-shield" /></div><div className="admin-snapshot-metrics"><div><strong>{stats.active_employees || 0}</strong><span>Active employees</span></div><div><strong>{stats.accessible_shops || 0}</strong><span>Shops on account</span></div><div><strong>{stats.low_stock_count || 0}</strong><span>Items low in stock</span></div></div><div className="admin-snapshot-actions"><button className="text-button" onClick={() => onGo('account')}>Manage account <ArrowRight size={14} /></button><button className="text-button" onClick={() => onGo('inventory')}>Review inventory <ArrowRight size={14} /></button></div></section>
   </div>
 }
 
@@ -497,28 +482,6 @@ function Reports({ report, currency }) {
   ]
   const dates = period.start && period.end ? `${period.start} – ${period.end}` : 'Last 30 days'
   return <div className="business-report-layout"><section className="panel analytics-overview"><div className="panel-heading"><div><span className="eyebrow">BUSINESS PERFORMANCE</span><h2>30-day financial summary</h2></div><span className="neutral-pill">{dates}</span></div><div className="analytics-metrics">{metrics.map((metric) => <article className="analytics-metric" key={metric.label}><span>{metric.label}</span><strong>{formatMoney(metric.value, currency)}</strong></article>)}</div><div className="analytics-footer"><span>{summary.sale_count || 0} completed sales</span><span>Average order value: <strong>{formatMoney(summary.average_order_value, currency)}</strong></span><span>Net margin: <strong>{Number(summary.profit_margin || 0).toFixed(1)}%</strong></span></div></section><ReportsLegacy report={report} currency={currency} /></div>
-}
-
-function PlatformAdminPage({ overview }) {
-  const [query, setQuery] = useState('')
-  const summary = overview?.summary || {}
-  const users = (overview?.users || []).filter((account) => account.email.toLowerCase().includes(query.toLowerCase()))
-  const shops = overview?.shops || []
-  const metrics = [
-    ['Accounts', summary.accounts || 0],
-    ['Shops', summary.shops || 0],
-    ['Active memberships', summary.activeMemberships || 0],
-    ['Logged in · 30 days', summary.loginsLast30Days || 0],
-  ]
-  const formatTimestamp = (value) => value
-    ? new Date(`${value.replace(' ', 'T')}Z`).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-    : 'Never'
-
-  return <div className="platform-admin-layout">
-    <section className="admin-stat-grid">{metrics.map(([label, value]) => <article className="panel admin-stat" key={label}><span>{label}</span><strong>{value}</strong></article>)}</section>
-    <section className="panel table-panel platform-user-panel"><div className="panel-heading padded-heading"><div><span className="eyebrow">PLATFORM ACCOUNTS</span><h2>People</h2></div><span className="neutral-pill">Latest 100</span></div><div className="table-toolbar"><span className="inventory-summary"><span className="summary-number">{users.length}</span> accounts</span><label className="search-field"><Search size={15} /><input aria-label="Search accounts" placeholder="Search email" value={query} onChange={(event) => setQuery(event.target.value)} /></label></div><div className="table-scroll"><table><thead><tr><th>Email</th><th>Created</th><th>Last login</th><th>Shops</th><th>Account</th></tr></thead><tbody>{users.map((account) => <tr key={account.id}><td><strong>{account.email}</strong></td><td>{formatTimestamp(account.created_at)}</td><td>{formatTimestamp(account.last_login_at)}</td><td>{account.shop_count}</td><td><span className={`platform-status ${account.active ? 'platform-active' : 'platform-disabled'}`}>{account.active ? 'Active' : 'Disabled'}</span></td></tr>)}</tbody></table>{users.length === 0 && <EmptyState icon={Users} title="No accounts match" text="Try another email search." />}</div><div className="table-footer"><span>Only platform admins can access this directory</span><span>Passwords and sales details are not shown</span></div></section>
-    <section className="panel table-panel platform-shop-panel"><div className="panel-heading padded-heading"><div><span className="eyebrow">WORKSPACES</span><h2>Shops</h2></div><span className="neutral-pill">{shops.length} shown</span></div><div className="table-scroll"><table><thead><tr><th>Shop</th><th>Created</th><th>Members</th><th>Items</th></tr></thead><tbody>{shops.map((shop) => <tr key={shop.id}><td><strong>{shop.name}</strong></td><td>{formatTimestamp(shop.created_at)}</td><td>{shop.member_count}</td><td>{shop.item_count}</td></tr>)}</tbody></table>{shops.length === 0 && <EmptyState icon={BriefcaseBusiness} title="No shops yet" text="New shops will appear here." />}</div></section>
-  </div>
 }
 
 function SettingsPage({ items, onEditUnits, onSetupUnits }) {

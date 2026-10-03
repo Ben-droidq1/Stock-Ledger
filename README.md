@@ -14,8 +14,6 @@ Open the Vite URL printed in the terminal. The API runs on port `3001`; Vite pro
 
 Set a unique `JWT_SECRET` in `.env` before deploying. Production startup refuses to run without it. `API_PORT` and `DATABASE_PATH` can also be configured there. The bundled development secret is only for local use.
 
-To grant access to the separate platform-wide **Platform admin** page, set `PLATFORM_ADMIN_EMAILS` to a comma-separated list of administrator email addresses, for example `PLATFORM_ADMIN_EMAILS=admin@example.com`. Restart the API after changing the allowlist. The page shows account registration/last-login and shop membership metadata; it does not expose passwords or shop financials.
-
 ## Access model
 
 - Sign up with an email and password, then create one or more shops. The creator becomes an owner of each shop and can switch between memberships from Account.
