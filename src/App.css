@@ -949,6 +949,11 @@
   font-size: 8px;
 }
 
+.status-low {
+  color: #a26247;
+  background: #f8ebe1;
+}
+
 .quick-panel h2 {
   margin: 5px 0 12px;
   color: #294036;
@@ -2471,6 +2476,20 @@ tbody tr:last-child td {
   .setup-caption { margin-top: 17px; font-size: 9px; }
   .dialog { padding: 17px; }
   .toast { right: 12px; bottom: 12px; left: 12px; justify-content: center; }
+}
+
+@media (max-width: 480px) {
+  .metric-grid { grid-template-columns: minmax(0, 1fr); }
+  .analytics-metrics { grid-template-columns: minmax(0, 1fr); }
+  .analytics-metric { border-right: 0 !important; padding-left: 12px !important; grid-column: auto !important; }
+  .table-footer { flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; min-height: 52px; }
+  .table-footer span:last-child { max-width: none; text-align: left; }
+  .admin-snapshot-metrics { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .admin-snapshot-metrics > div:nth-child(2n) { border-right: 0; }
+  .admin-snapshot-metrics > div:last-child { border-top: 1px solid #edf0eb; }
+  .recent-description small { max-width: 130px; }
+  .page-heading h1 { font-size: 24px; }
+  .top-avatar { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

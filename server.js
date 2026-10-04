@@ -11,6 +11,13 @@ import { convertQuantity, validateUnitEdges } from './src/unitConversions.js'
 const port = Number(process.env.API_PORT || 3001)
 const databasePath = process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'shops.sqlite')
 const jwtSecret = process.env.JWT_SECRET || 'local-development-secret-change-before-deploy'
+const adminEmails = new Set(
+  String(process.env.ADMIN_EMAILS || '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean),
+)
+const isAdminUser = (user) => Boolean(user && adminEmails.has(String(user.email || '').toLowerCase()))
 
 if (process.env.NODE_ENV === 'production' && (
   !process.env.JWT_SECRET ||
@@ -240,6 +247,7 @@ const cleanUser = (user) => ({
   role: user.role,
   active: Boolean(user.active),
   must_change_password: Boolean(user.must_change_password),
+  is_admin: isAdminUser(user),
 })
 
 const membershipFor = (userId, shopId) => db.prepare(`
@@ -247,7 +255,7 @@ const membershipFor = (userId, shopId) => db.prepare(`
   WHERE user_id = ? AND shop_id = ? AND active = 1 AND removed_at IS NULL
 `).get(userId, shopId)
 
-const issueToken = (user) => jwt.sign({ sub: user.id, shop_id: user.shop_id ?? null }, jwtSecret, { expiresIn: '15m' })
+const issueToken = (user) => jwt.sign({ sub: user.id, shop_id: user.shop_id ?? null }, jwtSecret, { expiresIn: '7d' })
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -344,6 +352,45 @@ app.get('/api/auth/me', (req, res) => {
     ? db.prepare('SELECT id, name, currency FROM shops WHERE id = ?').get(req.user.shop_id)
     : null
   res.json({ user: cleanUser(req.user), shop })
+})
+
+const requireAdmin = (req, res, next) => {
+  if (!isAdminUser(req.user)) return next(new HttpError(403, 'Admin access required'))
+  next()
+}
+
+app.get('/api/admin/overview', requireAdmin, (req, res) => {
+  const totals = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM users WHERE removed_at IS NULL) AS users,
+      (SELECT COUNT(*) FROM users WHERE removed_at IS NULL AND active = 1) AS active_users,
+      (SELECT COUNT(*) FROM users WHERE date(created_at) >= date('now', '-6 days')) AS new_this_week,
+      (SELECT COUNT(*) FROM users WHERE date(created_at) >= date('now', '-29 days')) AS new_this_month,
+      (SELECT COUNT(*) FROM shops) AS shops,
+      (SELECT COUNT(*) FROM items WHERE active = 1) AS items,
+      (SELECT COUNT(*) FROM sales) AS sales,
+      (SELECT COALESCE(SUM(total), 0) FROM sales) AS sales_value,
+      (SELECT COUNT(*) FROM expenses) AS expenses
+  `).get()
+  const byRole = db.prepare(`
+    SELECT role, COUNT(*) AS count FROM users WHERE removed_at IS NULL GROUP BY role
+  `).all()
+  res.json({ overview: { ...totals, by_role: byRole } })
+})
+
+app.get('/api/admin/users', requireAdmin, (req, res) => {
+  res.json({ users: db.prepare(`
+    SELECT users.id, users.email, users.role, users.active, users.removed_at, users.created_at,
+      (SELECT COUNT(*) FROM user_shops us WHERE us.user_id = users.id AND us.active = 1 AND us.removed_at IS NULL) AS shop_count,
+      (SELECT COUNT(*) FROM sales s WHERE s.created_by = users.id) AS sale_count,
+      (SELECT COUNT(*) FROM expenses e WHERE e.created_by = users.id) AS expense_count,
+      COALESCE(
+        (SELECT MAX(s.created_at) FROM sales s WHERE s.created_by = users.id),
+        (SELECT MAX(e.created_at) FROM expenses e WHERE e.created_by = users.id)
+      ) AS last_activity
+    FROM users
+    ORDER BY users.created_at DESC
+  `).all().map((user) => ({ ...user, active: Boolean(user.active) })) })
 })
 
 app.post('/api/auth/change-password', asyncRoute(async (req, res) => {
@@ -611,6 +658,20 @@ app.get('/api/dashboard', requireShop, requireOwner, (req, res) => {
     FROM sales JOIN users ON users.id = sales.created_by WHERE sales.shop_id = ?
     ORDER BY sales.created_at DESC LIMIT 5
   `).all(shop_id)
+  const daily = db.prepare(`
+    WITH RECURSIVE calendar(day) AS (
+      SELECT date('now', '-13 days')
+      UNION ALL SELECT date(day, '+1 day') FROM calendar WHERE day < date('now')
+    )
+    SELECT calendar.day AS date, COALESCE(SUM(sales.total), 0) AS revenue, COUNT(sales.id) AS count
+    FROM calendar LEFT JOIN sales ON sales.shop_id = ? AND date(sales.created_at) = calendar.day
+    GROUP BY calendar.day ORDER BY calendar.day
+  `).all(shop_id)
+  const lowStockItems = db.prepare(`
+    SELECT name, quantity, stock_unit FROM items
+    WHERE shop_id = ? AND active = 1 AND quantity <= 5
+    ORDER BY quantity ASC LIMIT 5
+  `).all(shop_id)
   res.json({ dashboard: {
     revenue: sales.revenue,
     gross_profit: sales.revenue - costs,
@@ -623,6 +684,8 @@ app.get('/api/dashboard', requireShop, requireOwner, (req, res) => {
     active_employees,
     accessible_shops,
     recent_sales: recent,
+    daily,
+    low_stock_items: lowStockItems,
   } })
 })
 

@@ -130,7 +130,7 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [data, setData] = useState({ items: [], sales: [], expenses: [], employees: [], unitItems: [], accountShops: [] })
+  const [data, setData] = useState({ items: [], sales: [], expenses: [], employees: [], unitItems: [], accountShops: [], adminOverview: null, adminUsers: [] })
   const [dialog, setDialog] = useState(null)
   const [query, setQuery] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
@@ -185,6 +185,16 @@ function App() {
         }))
         setError('')
       }).catch((requestError) => setError(requestError.message))
+      return
+    }
+    if (page === 'admin') {
+      if (!user?.is_admin) { setError('Admin access required'); return }
+      Promise.all([apiRequest(token, '/admin/overview'), apiRequest(token, '/admin/users')])
+        .then(([overview, users]) => {
+          setData((current) => ({ ...current, adminOverview: overview.overview, adminUsers: users.users }))
+          setError('')
+        })
+        .catch((requestError) => setError(requestError.message))
       return
     }
     const endpoints = {
@@ -294,6 +304,7 @@ function App() {
     reports: ['Reports', 'A closer look at your shop’s performance.'],
     settings: ['Settings', 'Manage the people who can access your shop.'],
     account: ['Account', 'Manage your shops, access, and team.'],
+    admin: ['Admin', 'Monitor everyone using Stock Ledger.'],
   }[page] || ['Inventory', 'Keep track of what’s on your shelves.']
 
   async function refresh() {
@@ -329,6 +340,7 @@ function App() {
       <div className="shop-switcher"><span className="shop-avatar">{shop.name.slice(0, 1).toUpperCase()}</span><span className="shop-switch-info"><strong>{shop.name}</strong><small>{isOwner ? 'Owner workspace' : 'Team workspace'}</small></span><ChevronDown size={15} /></div>
       <nav className="side-nav" aria-label="Main navigation">
         {navGroups.map((group) => <div className="nav-group" key={group.label}><span className="nav-label">{group.label}</span>{group.links.filter((link) => isOwner || !link.owner).map(({ id, label, icon: Icon }) => <button key={id} className={`nav-link ${page === id ? 'nav-active' : ''}`} onClick={() => { setPage(id); setMobileNav(false); setQuery('') }}><Icon size={17} strokeWidth={1.8} /><span>{label}</span>{id === 'inventory' && data.items.some((item) => item.quantity < 5) && <span className="nav-alert" />}</button>)}</div>)}
+        {user?.is_admin && <div className="nav-group"><span className="nav-label">Site</span><button className={`nav-link ${page === 'admin' ? 'nav-active' : ''}`} onClick={() => { setPage('admin'); setMobileNav(false); setQuery('') }}><ShieldCheck size={17} strokeWidth={1.8} /><span>Admin</span></button></div>}
       </nav>
       <div className="sidebar-bottom">
         <div className="sidebar-help"><span className="help-icon"><CircleHelp size={16} /></span><div><strong>Need a hand?</strong><small>We’re here to help.</small></div><ArrowRight size={14} /></div>
@@ -351,6 +363,7 @@ function App() {
         {page === 'reports' && isOwner && <Reports report={data.reports} currency={shop.currency} />}
         {page === 'settings' && <SettingsPage items={data.unitItems} onEditUnits={(item) => setDialog({ type: 'unit-profile', item })} onSetupUnits={(item) => setDialog({ type: 'unit-profile', item, firstSetup: true })} />}
         {page === 'account' && <AccountPage user={user} shops={data.accountShops} isOwner={isOwner} employees={data.employees} busy={busy} error={error} onCreateShop={createShop} onSelectShop={selectShop} onAddEmployee={() => setDialog({ type: 'employee' })} onToggleEmployee={(employee) => saveAndRefresh(`/team/${employee.id}/status`, { method: 'PATCH', body: JSON.stringify({ active: !employee.active }) }, employee.active ? 'Employee disabled' : 'Employee enabled')} onResetEmployee={(employee) => setDialog({ type: 'reset-password', employee })} onRemoveEmployee={(employee) => setDialog({ type: 'remove-employee', employee })} />}
+        {page === 'admin' && <AdminPage overview={data.adminOverview} users={data.adminUsers} />}
       </div>
     </main>
 
@@ -378,11 +391,27 @@ function PasswordSetup({ onSubmit, error, busy, signOut }) {
   function Dashboard({ dashboard, currency, onGo, today }) {
   const stats = dashboard || {}
   return <div className="dashboard-grid">
-    <section className="welcome-strip"><div className="welcome-copy"><span className="welcome-kicker">YOUR SHOP, AT A GLANCE</span><h2>Steady progress<br />looks good on you.</h2><p>Here’s what’s happening across your shop.</p></div><div className="welcome-graphic"><span className="graphic-ring ring-one"/><span className="graphic-ring ring-two"/><span className="graphic-stem stem-one"/><span className="graphic-stem stem-two"/><span className="graphic-stem stem-three"/><span className="graphic-stem stem-four"/><span className="graphic-dot"/></div><div className="welcome-date">{today.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}</div></section>
     <section className="metric-grid"><Metric label="Total revenue" value={formatMoney(stats.revenue, currency)} detail={`${stats.sale_count || 0} completed sales`} icon={TrendingUp} tone="green" /><Metric label="Net profit" value={formatMoney(stats.net_profit, currency)} detail={`After ${formatMoney(stats.expenses, currency)} in expenses`} icon={ArrowDownLeft} tone="coral" /><Metric label="Inventory value" value={formatMoney(stats.inventory_value, currency)} detail={`${stats.item_count || 0} active items`} icon={Package} tone="blue" /><Metric label="Gross profit" value={formatMoney(stats.gross_profit, currency)} detail="Before operating expenses" icon={BarChart3} tone="gold" /></section>
+    <section className="panel recent-panel"><div className="panel-heading"><div><span className="eyebrow">ATTENTION NEEDED</span><h2>Running low</h2></div><button className="text-button" onClick={() => onGo('inventory')}>View all <ArrowRight size={14} /></button></div>{stats.low_stock_items?.length ? <div className="recent-list">{stats.low_stock_items.map((item) => <div className="recent-row" key={item.name}><span className="recent-icon"><Package size={15} /></span><span className="recent-description"><strong>{item.name}</strong><small>Restock soon</small></span><strong className="recent-amount">{item.quantity} {item.stock_unit} left</strong><span className="status-pill status-low">Low</span></div>)}</div> : <EmptyState icon={Package} title="Stock looks healthy" text="Items running low will be flagged here." />}</section>
     <section className="panel recent-panel"><div className="panel-heading"><div><span className="eyebrow">THE LATEST</span><h2>Recent sales</h2></div><button className="text-button" onClick={() => onGo('sales')}>View all <ArrowRight size={14} /></button></div>{stats.recent_sales?.length ? <div className="recent-list">{stats.recent_sales.map((sale) => <div className="recent-row" key={sale.id}><span className="recent-icon"><ShoppingBag size={15} /></span><span className="recent-description"><strong>Sale #{String(sale.id).padStart(4, '0')}</strong><small>{sale.staff_email} · {formatDate(sale.created_at)}</small></span><strong className="recent-amount">{formatMoney(sale.total, currency)}</strong><span className="status-pill status-complete">Complete</span></div>)}</div> : <EmptyState icon={ShoppingBag} title="Your first sale is waiting" text="When something sells, you’ll see it here." action="Open inventory" onAction={() => onGo('inventory')} />}</section>
     <section className="panel quick-panel"><span className="eyebrow">QUICK ACTIONS</span><h2>Keep things moving</h2><button className="quick-link" onClick={() => onGo('inventory')}><span className="quick-icon quick-green"><Boxes size={17} /></span><span><strong>Check your stock</strong><small>See what’s on your shelves</small></span><ArrowRight size={16} /></button><button className="quick-link" onClick={() => onGo('expenses')}><span className="quick-icon quick-coral"><CreditCard size={17} /></span><span><strong>Log an expense</strong><small>Keep your numbers current</small></span><ArrowRight size={16} /></button><button className="quick-link" onClick={() => onGo('settings')}><span className="quick-icon quick-blue"><Users size={17} /></span><span><strong>Manage your team</strong><small>People with shop access</small></span><ArrowRight size={16} /></button></section>
     <section className="panel admin-snapshot"><div className="panel-heading"><div><span className="eyebrow">ADMIN SNAPSHOT</span><h2>Shop operations</h2></div><ShieldCheck size={17} className="admin-shield" /></div><div className="admin-snapshot-metrics"><div><strong>{stats.active_employees || 0}</strong><span>Active employees</span></div><div><strong>{stats.accessible_shops || 0}</strong><span>Shops on account</span></div><div><strong>{stats.low_stock_count || 0}</strong><span>Items low in stock</span></div></div><div className="admin-snapshot-actions"><button className="text-button" onClick={() => onGo('account')}>Manage account <ArrowRight size={14} /></button><button className="text-button" onClick={() => onGo('inventory')}>Review inventory <ArrowRight size={14} /></button></div></section>
+  </div>
+}
+
+function AdminPage({ overview, users }) {
+  const [query, setQuery] = useState('')
+  const stats = overview || {}
+  const filtered = (users || []).filter((user) => user.email.toLowerCase().includes(query.toLowerCase()))
+  const formatJoined = (value) => new Date(`${String(value).replace(' ', 'T')}Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  return <div className="dashboard-grid">
+    <section className="metric-grid">
+      <Metric label="Total users" value={stats.users ?? 0} detail={`${stats.active_users ?? 0} active`} icon={Users} tone="blue" />
+      <Metric label="New this week" value={stats.new_this_week ?? 0} detail={`${stats.new_this_month ?? 0} in 30 days`} icon={UserPlus} tone="green" />
+      <Metric label="Shops" value={stats.shops ?? 0} detail={`${stats.items ?? 0} active items`} icon={ShoppingBag} tone="gold" />
+      <Metric label="Sales logged" value={stats.sales ?? 0} detail={`${stats.expenses ?? 0} expenses`} icon={BarChart3} tone="coral" />
+    </section>
+    <section className="panel table-panel"><div className="panel-heading padded-heading"><div><span className="eyebrow">EVERYONE ON THE SITE</span><h2>Users</h2></div><label className="search-field sale-search"><Search size={15} /><input placeholder="Find an email" value={query} onChange={(event) => setQuery(event.target.value)} /></label></div><div className="table-scroll"><table><thead><tr><th>User</th><th>Role</th><th>Shops</th><th>Sales</th><th>Expenses</th><th>Last activity</th><th>Status</th><th>Joined</th></tr></thead><tbody>{filtered.map((user) => <tr key={user.id}><td><span className="item-cell"><span className="team-avatar">{initials(user.email)}</span><strong>{user.email}</strong></span></td><td>{user.role}</td><td>{user.shop_count}</td><td>{user.sale_count}</td><td>{user.expense_count}</td><td>{user.last_activity ? formatDate(user.last_activity) : 'Never'}</td><td><span className={`team-status ${user.active && !user.removed_at ? 'team-active' : 'team-disabled'}`}><i />{user.removed_at ? 'Removed' : user.active ? 'Active' : 'Disabled'}</span></td><td>{formatJoined(user.created_at)}</td></tr>)}</tbody></table>{filtered.length === 0 && <EmptyState icon={Users} title="No users found" text="Try a different search." />}</div><div className="table-footer"><span><strong>{filtered.length}</strong> users</span><span>Site-wide view across all shops</span></div></section>
   </div>
 }
 
@@ -481,7 +510,9 @@ function Reports({ report, currency }) {
     { label: 'Net profit', value: summary.net_profit },
   ]
   const dates = period.start && period.end ? `${period.start} – ${period.end}` : 'Last 30 days'
-  return <div className="business-report-layout"><section className="panel analytics-overview"><div className="panel-heading"><div><span className="eyebrow">BUSINESS PERFORMANCE</span><h2>30-day financial summary</h2></div><span className="neutral-pill">{dates}</span></div><div className="analytics-metrics">{metrics.map((metric) => <article className="analytics-metric" key={metric.label}><span>{metric.label}</span><strong>{formatMoney(metric.value, currency)}</strong></article>)}</div><div className="analytics-footer"><span>{summary.sale_count || 0} completed sales</span><span>Average order value: <strong>{formatMoney(summary.average_order_value, currency)}</strong></span><span>Net margin: <strong>{Number(summary.profit_margin || 0).toFixed(1)}%</strong></span></div></section><ReportsLegacy report={report} currency={currency} /></div>
+  return <div className="business-report-layout"><section className="panel analytics-overview"><div className="panel-heading"><div><span className="eyebrow">BUSINESS PERFORMANCE</span><h2>30-day financial summary</h2></div><span className="neutral-pill">{dates}</span></div><div className="analytics-metrics">{metrics.map((metric) => <article className="analytics-metric" key={metric.label}><span>{metric.label}</span><strong>{formatMoney(metric.value, currency)}</strong></article>)}</div><div className="analytics-footer"><span>{summary.sale_count || 0} completed sales</span><span>Average order value: <strong>{formatMoney(summary.average_order_value, currency)}</strong></span><span>Net margin: <strong>{Number(summary.profit_margin || 0).toFixed(1)}%</strong></span></div></section>
+    <section className="panel table-panel"><div className="panel-heading padded-heading"><div><span className="eyebrow">DAY BY DAY</span><h2>Recent days</h2></div><span className="neutral-pill">Last 7 days</span></div><div className="table-scroll"><table><thead><tr><th>Date</th><th>Sales</th><th>Revenue</th><th>Expenses</th><th>Net profit</th></tr></thead><tbody>{(report?.sales || []).slice(-7).reverse().map((day) => <tr key={day.date}><td>{new Date(`${day.date}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</td><td>{day.count}</td><td className="money-cell">{formatMoney(day.revenue, currency)}</td><td className="money-cell">{formatMoney(day.expenses, currency)}</td><td className="money-cell">{formatMoney(day.net_profit, currency)}</td></tr>)}</tbody></table>{(report?.sales || []).length === 0 && <EmptyState icon={BarChart3} title="No reports yet" text="Sales data will show up here." />}</div></section>
+    <ReportsLegacy report={report} currency={currency} /></div>
 }
 
 function SettingsPage({ items, onEditUnits, onSetupUnits }) {
