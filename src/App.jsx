@@ -65,6 +65,54 @@ function AuthScreen({ onAuth, busy, error, setError }) {
   const [password, setPassword] = useState('')
   const [passwordConfirmation, setPasswordConfirmation] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  // Google Client ID from Google Cloud Console
+  const googleClientId = '532582015857-c5nuhpc6eindd1odtmf6saa35ros8l3p.apps.googleusercontent.com'
+  const [googlePrompt, setGooglePrompt] = useState(null)
+
+  // Load Google Identity Services script
+  useEffect(() => {
+    const script = document.createElement('script')
+    script.src = 'https://accounts.google.com/gsi/client'
+    script.async = true
+    script.defer = true
+    script.onload = () => {
+      window.google.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: handleCredentialResponse,
+        auto_select: false,
+      })
+      window.google.accounts.id.renderButton(
+        document.getElementById('google-container'),
+        { theme: 'outline', size: 'large', text: 'signin_with' }
+      )
+      setGooglePrompt(true)
+    }
+    document.head.appendChild(script)
+    return () => {
+      document.head.removeChild(script)
+    }
+  }, [googleClientId])
+
+  async function handleCredentialResponse(response) {
+    if (!googleClientId) return
+    setSubmitting(true)
+    try {
+      const result = await apiRequest(null, 'auth/google', {
+        method: 'POST',
+        body: JSON.stringify({ idToken: response }),
+      })
+      onAuth(result)
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  // Google Sign-In button: rendered by Google Identity Services script
+  const googleButton = googlePrompt
+    ? <div id="google-container" style={{ marginTop: '12px' }} />
+    : null
 
   async function submit(event) {
     event.preventDefault()
@@ -109,6 +157,8 @@ function AuthScreen({ onAuth, busy, error, setError }) {
           <Field label="Email address" type="email" autoComplete="email" placeholder="you@yourshop.com" value={email} onChange={(event) => setEmail(event.target.value)} required />
           <Field label="Password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} placeholder="At least 8 characters" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required />
           {mode === 'signup' && <Field label="Confirm password" type="password" autoComplete="new-password" placeholder="Enter your password again" value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} minLength={8} required />}
+          {googlePrompt && <div className="google-signin-divider"><hr /></div>}
+          {googlePrompt && <div id="google-container" style={{ marginTop: '12px', borderTop: '1px solid #eee', paddingTop: '12px' }} />}
           {error && <p className="form-error" role="alert">{error}</p>}
           <button className="button button-primary button-wide" disabled={submitting}>{submitting ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}<ArrowRight size={16} /></button>
         </form>

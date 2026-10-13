@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import bcrypt from 'bcryptjs'
 import Database from 'better-sqlite3'
+import { GoogleAuth } from 'google-auth-library'
 import express from 'express'
 import { rateLimit } from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
@@ -11,6 +12,7 @@ import { convertQuantity, validateUnitEdges } from './src/unitConversions.js'
 const port = Number(process.env.API_PORT || 3001)
 const databasePath = process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'shops.sqlite')
 const jwtSecret = process.env.JWT_SECRET || 'local-development-secret-change-before-deploy'
+const googleClientId = process.env.GOOGLE_CLIENT_ID
 const adminEmails = new Set(
   String(process.env.ADMIN_EMAILS || '')
     .split(',')
@@ -18,6 +20,10 @@ const adminEmails = new Set(
     .filter(Boolean),
 )
 const isAdminUser = (user) => Boolean(user && adminEmails.has(String(user.email || '').toLowerCase()))
+
+const googleAuth = googleClientId
+  ? new GoogleAuth({ clientID: googleClientId, timeout: 1000 })
+  : null
 
 if (process.env.NODE_ENV === 'production' && (
   !process.env.JWT_SECRET ||
@@ -257,6 +263,23 @@ const membershipFor = (userId, shopId) => db.prepare(`
 
 const issueToken = (user) => jwt.sign({ sub: user.id, shop_id: user.shop_id ?? null }, jwtSecret, { expiresIn: '7d' })
 
+function verifyGoogleIdToken (idToken) {
+  if (!googleClientId || !idToken) return null
+  try {
+    const ticket = googleAuth.verifyIdToken({ idToken, audience: googleClientId })
+    const payload = ticket.getPayload()
+    if (!payload || !payload.email_verified || payload.iss !== 'https://accounts.google.com') return null
+    return {
+      google_sub: payload.sub,
+      email: payload.email,
+      name: payload.name,
+      picture: payload.picture
+    }
+  } catch {
+    return null
+  }
+}
+
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
@@ -288,7 +311,18 @@ app.post('/api/auth/signup', loginLimiter, asyncRoute(async (req, res) => {
 app.post('/api/auth/login', loginLimiter, asyncRoute(async (req, res) => {
   const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : ''
   const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email)
-    if (!user || user.removed_at || !(await bcrypt.compare(String(req.body.password || ''), user.password_hash))) {
+  if (!user || user.removed_at) {
+    // If user exists but has no password (Google only), give a clear message
+    if (user && user.auth_provider === 'google') {
+      throw new HttpError(401, 'Use Continue with Google to sign in')
+    }
+    throw new HttpError(401, 'Email or password is incorrect')
+  }
+  if (!user.password_hash) {
+    // Should not happen if above check works, but safety net
+    throw new HttpError(401, 'Use Continue with Google to sign in')
+  }
+  if (!(await bcrypt.compare(String(req.body.password || ''), user.password_hash))) {
     throw new HttpError(401, 'Email or password is incorrect')
   }
   let membership = user.shop_id ? membershipFor(user.id, user.shop_id) : null
@@ -310,7 +344,56 @@ app.post('/api/auth/login', loginLimiter, asyncRoute(async (req, res) => {
   res.json({ token: issueToken(sessionUser), user: cleanUser(sessionUser) })
 }))
 
+app.post('/api/auth/google', loginLimiter, asyncRoute(async (req, res) => {
+  const { idToken } = req.body
+  const payload = verifyGoogleIdToken(idToken)
+  if (!payload) throw new HttpError(401, 'Invalid Google token')
+
+  const userByEmail = db.prepare('SELECT * FROM users WHERE email = ?').get(payload.email)
+
+  let user
+  if (userByEmail) {
+    // Link: if user already exists with same email
+    if (!userByEmail.google_sub) {
+      // User has password but no google_sub yet — link the google account
+      db.prepare('UPDATE users SET google_sub = ? WHERE email = ?').run(payload.google_sub, payload.email)
+    }
+    // If user has google_sub, they already linked
+    user = userByEmail
+  } else {
+    // Create new user: no password, just google
+    const result = db.prepare('INSERT INTO users (email, google_sub, password_hash, role, auth_provider) VALUES (?, ?, NULL, ?, ?)')
+      .run(payload.email, payload.google_sub, 'owner', 'google')
+    user = db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid)
+  }
+
+  let membership = user.shop_id ? membershipFor(user.id, user.shop_id) : null
+  if (!membership) {
+    membership = db.prepare(`
+      SELECT shop_id, role, active FROM user_shops
+      WHERE user_id = ? AND active = 1 AND removed_at IS NULL ORDER BY joined_at LIMIT 1
+    `).get(user.id)
+  }
+    if (!membership && db.prepare('SELECT 1 FROM user_shops WHERE user_id = ? LIMIT 1').get(user.id)) {
+      throw new HttpError(403, 'This account has no active shop memberships')
+    }
+  const sessionUser = membership
+    ? { ...user, shop_id: membership.shop_id, role: membership.role }
+    : { ...user, shop_id: null }
+  if (membership && user.shop_id !== membership.shop_id) {
+    db.prepare('UPDATE users SET shop_id = ?, role = ? WHERE id = ?').run(membership.shop_id, membership.role, user.id)
+  }
+  res.json({ token: issueToken(sessionUser), user: cleanUser(sessionUser) })
+}))
+
+app.get("/api/auth/config", asyncRoute(async (req, res) => {
+  res.json({ googleClientId: googleClientId || '' })
+}))
+
 const authenticate = asyncRoute(async (req, res, next) => {
+  // Allow auth config endpoint without token
+  const cleanPath = req.path.split('?')[0]
+  if (cleanPath === '/api/auth/config' || cleanPath === '/api/auth/google') return next()
   const token = req.headers.authorization?.match(/^Bearer (.+)$/i)?.[1]
   if (!token) throw new HttpError(401, 'Sign in to continue')
   let payload
