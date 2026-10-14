@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import {
   ArrowDownLeft, ArrowRight, BarChart3, Boxes, BriefcaseBusiness, Check, ChevronDown, CircleHelp,
   Clock3, CreditCard, LayoutDashboard, LogOut, Menu, MoreHorizontal, Package,
@@ -81,10 +81,15 @@ function AuthScreen({ onAuth, busy, error, setError }) {
         callback: handleCredentialResponse,
         auto_select: false,
       })
-      window.google.accounts.id.renderButton(
-        document.getElementById('google-container'),
-        { theme: 'outline', size: 'large', text: 'signin_with' }
-      )
+      // Use ref to target the container - renderButton needs the element to exist
+      const containerRef = document.getElementById('google-container')
+      if (containerRef) {
+        window.google.accounts.id.renderButton(containerRef, {
+          theme: 'outline',
+          size: 'large',
+          text: 'signin_with',
+        })
+      }
       setGooglePrompt(true)
     }
     document.head.appendChild(script)
@@ -110,9 +115,8 @@ function AuthScreen({ onAuth, busy, error, setError }) {
   }
 
   // Google Sign-In button: rendered by Google Identity Services script
-  const googleButton = googlePrompt
-    ? <div id="google-container" style={{ marginTop: '12px' }} />
-    : null
+  // The container must exist in DOM before Google script tries to render the button
+  const googleContainer = <div id="google-container" style={{ marginTop: '12px' }} />
 
   async function submit(event) {
     event.preventDefault()
@@ -158,8 +162,8 @@ function AuthScreen({ onAuth, busy, error, setError }) {
           <Field label="Password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} placeholder="At least 8 characters" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required />
           {mode === 'signup' && <Field label="Confirm password" type="password" autoComplete="new-password" placeholder="Enter your password again" value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} minLength={8} required />}
           {googlePrompt && <div className="google-signin-divider"><hr /></div>}
-          {googlePrompt && <div id="google-container" style={{ marginTop: '12px', borderTop: '1px solid #eee', paddingTop: '12px' }} />}
-          {error && <p className="form-error" role="alert">{error}</p>}
+        {googleContainer}
+        {error && <p className="form-error" role="alert">{error}</p>}
           <button className="button button-primary button-wide" disabled={submitting}>{submitting ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}<ArrowRight size={16} /></button>
         </form>
         <p className="auth-switch">{mode === 'login' ? 'New to Stock Ledger?' : 'Already have an account?'} <button type="button" onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setPasswordConfirmation(''); setError('') }}>{mode === 'login' ? 'Create an account' : 'Sign in'}</button></p>
