@@ -1,7 +1,7 @@
 import 'dotenv/config'
 import bcrypt from 'bcryptjs'
 import Database from 'better-sqlite3'
-import { GoogleAuth } from 'google-auth-library'
+import { OAuth2Client } from 'google-auth-library'
 import express from 'express'
 import { rateLimit } from 'express-rate-limit'
 import jwt from 'jsonwebtoken'
@@ -21,9 +21,7 @@ const adminEmails = new Set(
 )
 const isAdminUser = (user) => Boolean(user && adminEmails.has(String(user.email || '').toLowerCase()))
 
-const googleAuth = googleClientId
-  ? new GoogleAuth({ clientID: googleClientId, timeout: 1000 })
-  : null
+const googleClient = googleClientId ? new OAuth2Client(googleClientId) : null
 
 if (process.env.NODE_ENV === 'production' && (
   !process.env.JWT_SECRET ||
@@ -47,6 +45,8 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    google_sub TEXT,
+    auth_provider TEXT NOT NULL DEFAULT 'password',
     password_hash TEXT NOT NULL,
     shop_id INTEGER REFERENCES shops(id),
     role TEXT NOT NULL DEFAULT 'owner' CHECK (role IN ('owner', 'employee')),
@@ -134,6 +134,11 @@ db.prepare(`
 if (!db.pragma('table_info(items)').some((column) => column.name === 'stock_unit')) {
   db.exec("ALTER TABLE items ADD COLUMN stock_unit TEXT NOT NULL DEFAULT 'unit'")
 }
+
+const userColumns = new Set(db.pragma('table_info(users)').map((column) => column.name))
+if (!userColumns.has('google_sub')) db.exec('ALTER TABLE users ADD COLUMN google_sub TEXT')
+if (!userColumns.has('auth_provider')) db.exec("ALTER TABLE users ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'password'")
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_idx ON users(google_sub) WHERE google_sub IS NOT NULL')
 
 const app = express()
 app.use(express.json({ limit: '32kb' }))
@@ -261,19 +266,39 @@ const membershipFor = (userId, shopId) => db.prepare(`
   WHERE user_id = ? AND shop_id = ? AND active = 1 AND removed_at IS NULL
 `).get(userId, shopId)
 
+function resolveSessionUser(user) {
+  let membership = user.shop_id ? membershipFor(user.id, user.shop_id) : null
+  if (!membership) {
+    membership = db.prepare(`
+      SELECT shop_id, role, active FROM user_shops
+      WHERE user_id = ? AND active = 1 AND removed_at IS NULL ORDER BY joined_at LIMIT 1
+    `).get(user.id)
+  }
+  if (!membership && db.prepare('SELECT 1 FROM user_shops WHERE user_id = ? LIMIT 1').get(user.id)) {
+    throw new HttpError(403, 'This account has no active shop memberships')
+  }
+  const sessionUser = membership
+    ? { ...user, shop_id: membership.shop_id, role: membership.role }
+    : { ...user, shop_id: null }
+  if (membership && user.shop_id !== membership.shop_id) {
+    db.prepare('UPDATE users SET shop_id = ?, role = ? WHERE id = ?').run(membership.shop_id, membership.role, user.id)
+  }
+  return sessionUser
+}
+
 const issueToken = (user) => jwt.sign({ sub: user.id, shop_id: user.shop_id ?? null }, jwtSecret, { expiresIn: '7d' })
 
-function verifyGoogleIdToken (idToken) {
-  if (!googleClientId || !idToken) return null
+async function verifyGoogleIdToken(idToken) {
+  if (!googleClient || typeof idToken !== 'string') return null
   try {
-    const ticket = googleAuth.verifyIdToken({ idToken, audience: googleClientId })
+    const ticket = await googleClient.verifyIdToken({ idToken, audience: googleClientId })
     const payload = ticket.getPayload()
-    if (!payload || !payload.email_verified || payload.iss !== 'https://accounts.google.com') return null
+    if (!payload?.email_verified || !payload.email) return null
     return {
       google_sub: payload.sub,
       email: payload.email,
       name: payload.name,
-      picture: payload.picture
+      picture: payload.picture,
     }
   } catch {
     return null
@@ -311,89 +336,44 @@ app.post('/api/auth/signup', loginLimiter, asyncRoute(async (req, res) => {
 app.post('/api/auth/login', loginLimiter, asyncRoute(async (req, res) => {
   const email = typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase() : ''
   const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email)
-  if (!user || user.removed_at) {
-    // If user exists but has no password (Google only), give a clear message
-    if (user && user.auth_provider === 'google') {
-      throw new HttpError(401, 'Use Continue with Google to sign in')
-    }
-    throw new HttpError(401, 'Email or password is incorrect')
-  }
-  if (!user.password_hash) {
-    // Should not happen if above check works, but safety net
-    throw new HttpError(401, 'Use Continue with Google to sign in')
-  }
+  if (!user || user.removed_at) throw new HttpError(401, 'Email or password is incorrect')
+  if (!user.password_hash) throw new HttpError(401, 'Use Continue with Google to sign in')
   if (!(await bcrypt.compare(String(req.body.password || ''), user.password_hash))) {
     throw new HttpError(401, 'Email or password is incorrect')
   }
-  let membership = user.shop_id ? membershipFor(user.id, user.shop_id) : null
-  if (!membership) {
-    membership = db.prepare(`
-      SELECT shop_id, role, active FROM user_shops
-      WHERE user_id = ? AND active = 1 AND removed_at IS NULL ORDER BY joined_at LIMIT 1
-    `).get(user.id)
-  }
-    if (!membership && db.prepare('SELECT 1 FROM user_shops WHERE user_id = ? LIMIT 1').get(user.id)) {
-      throw new HttpError(403, 'This account has no active shop memberships')
-    }
-  const sessionUser = membership
-    ? { ...user, shop_id: membership.shop_id, role: membership.role }
-    : { ...user, shop_id: null }
-  if (membership && user.shop_id !== membership.shop_id) {
-    db.prepare('UPDATE users SET shop_id = ?, role = ? WHERE id = ?').run(membership.shop_id, membership.role, user.id)
-  }
+  const sessionUser = resolveSessionUser(user)
   res.json({ token: issueToken(sessionUser), user: cleanUser(sessionUser) })
 }))
 
 app.post('/api/auth/google', loginLimiter, asyncRoute(async (req, res) => {
-  const { idToken } = req.body
-  const payload = verifyGoogleIdToken(idToken)
+  const payload = await verifyGoogleIdToken(req.body.idToken)
   if (!payload) throw new HttpError(401, 'Invalid Google token')
 
-  const userByEmail = db.prepare('SELECT * FROM users WHERE email = ?').get(payload.email)
-
-  let user
-  if (userByEmail) {
-    // Link: if user already exists with same email
-    if (!userByEmail.google_sub) {
-      // User has password but no google_sub yet — link the google account
-      db.prepare('UPDATE users SET google_sub = ? WHERE email = ?').run(payload.google_sub, payload.email)
+  const email = payload.email.toLowerCase()
+  const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(email)
+  let user = existing
+  if (existing) {
+    if (!existing.google_sub) {
+      db.prepare('UPDATE users SET google_sub = ? WHERE id = ?').run(payload.google_sub, existing.id)
+      user = { ...existing, google_sub: payload.google_sub }
     }
-    // If user has google_sub, they already linked
-    user = userByEmail
   } else {
-    // Create new user: no password, just google
-    const result = db.prepare('INSERT INTO users (email, google_sub, password_hash, role, auth_provider) VALUES (?, ?, NULL, ?, ?)')
-      .run(payload.email, payload.google_sub, 'owner', 'google')
+    const result = db.prepare(`
+      INSERT INTO users (email, google_sub, password_hash, role, auth_provider)
+      VALUES (?, ?, '', 'owner', 'google')
+    `).run(email, payload.google_sub)
     user = db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid)
   }
 
-  let membership = user.shop_id ? membershipFor(user.id, user.shop_id) : null
-  if (!membership) {
-    membership = db.prepare(`
-      SELECT shop_id, role, active FROM user_shops
-      WHERE user_id = ? AND active = 1 AND removed_at IS NULL ORDER BY joined_at LIMIT 1
-    `).get(user.id)
-  }
-    if (!membership && db.prepare('SELECT 1 FROM user_shops WHERE user_id = ? LIMIT 1').get(user.id)) {
-      throw new HttpError(403, 'This account has no active shop memberships')
-    }
-  const sessionUser = membership
-    ? { ...user, shop_id: membership.shop_id, role: membership.role }
-    : { ...user, shop_id: null }
-  if (membership && user.shop_id !== membership.shop_id) {
-    db.prepare('UPDATE users SET shop_id = ?, role = ? WHERE id = ?').run(membership.shop_id, membership.role, user.id)
-  }
+  const sessionUser = resolveSessionUser(user)
   res.json({ token: issueToken(sessionUser), user: cleanUser(sessionUser) })
 }))
 
-app.get("/api/auth/config", asyncRoute(async (req, res) => {
+app.get('/api/auth/config', (req, res) => {
   res.json({ googleClientId: googleClientId || '' })
-}))
+})
 
 const authenticate = asyncRoute(async (req, res, next) => {
-  // Allow auth config endpoint without token
-  const cleanPath = req.path.split('?')[0]
-  if (cleanPath === '/api/auth/config' || cleanPath === '/api/auth/google') return next()
   const token = req.headers.authorization?.match(/^Bearer (.+)$/i)?.[1]
   if (!token) throw new HttpError(401, 'Sign in to continue')
   let payload

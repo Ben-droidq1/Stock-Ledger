@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ArrowDownLeft, ArrowRight, BarChart3, Boxes, BriefcaseBusiness, Check, ChevronDown, CircleHelp,
   Clock3, CreditCard, LayoutDashboard, LogOut, Menu, MoreHorizontal, Package,
@@ -65,26 +65,58 @@ function AuthScreen({ onAuth, busy, error, setError }) {
   const [password, setPassword] = useState('')
   const [passwordConfirmation, setPasswordConfirmation] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  // Google Client ID from Google Cloud Console
-  const googleClientId = '532582015857-c5nuhpc6eindd1odtmf6saa35ros8l3p.apps.googleusercontent.com'
-  const [googlePrompt, setGooglePrompt] = useState(null)
+  const [googleClientId, setGoogleClientId] = useState('')
+  const [googlePrompt, setGooglePrompt] = useState(false)
+  const onAuthRef = useRef(onAuth)
+  const setErrorRef = useRef(setError)
 
-  // Load Google Identity Services script
   useEffect(() => {
+    onAuthRef.current = onAuth
+    setErrorRef.current = setError
+  })
+
+  useEffect(() => {
+    apiRequest(null, '/auth/config')
+      .then((config) => setGoogleClientId(config.googleClientId || ''))
+      .catch(() => setGoogleClientId(''))
+  }, [])
+
+  useEffect(() => {
+    if (!googleClientId) return undefined
+    let cancelled = false
+
+    async function handleCredentialResponse(response) {
+      const idToken = response?.credential
+      if (!idToken) return
+      setSubmitting(true)
+      try {
+        const result = await apiRequest(null, 'auth/google', {
+          method: 'POST',
+          body: JSON.stringify({ idToken }),
+        })
+        onAuthRef.current(result)
+      } catch (requestError) {
+        setErrorRef.current(requestError.message)
+      } finally {
+        setSubmitting(false)
+      }
+    }
+
     const script = document.createElement('script')
+    script.id = 'google-gsi-client'
     script.src = 'https://accounts.google.com/gsi/client'
     script.async = true
     script.defer = true
     script.onload = () => {
+      if (cancelled || !window.google) return
       window.google.accounts.id.initialize({
         client_id: googleClientId,
         callback: handleCredentialResponse,
         auto_select: false,
       })
-      // Use ref to target the container - renderButton needs the element to exist
-      const containerRef = document.getElementById('google-container')
-      if (containerRef) {
-        window.google.accounts.id.renderButton(containerRef, {
+      const container = document.getElementById('google-container')
+      if (container) {
+        window.google.accounts.id.renderButton(container, {
           theme: 'outline',
           size: 'large',
           text: 'signin_with',
@@ -92,30 +124,14 @@ function AuthScreen({ onAuth, busy, error, setError }) {
       }
       setGooglePrompt(true)
     }
+    document.getElementById('google-gsi-client')?.remove()
     document.head.appendChild(script)
     return () => {
-      document.head.removeChild(script)
+      cancelled = true
+      script.remove()
     }
   }, [googleClientId])
 
-  async function handleCredentialResponse(response) {
-    if (!googleClientId) return
-    setSubmitting(true)
-    try {
-      const result = await apiRequest(null, 'auth/google', {
-        method: 'POST',
-        body: JSON.stringify({ idToken: response }),
-      })
-      onAuth(result)
-    } catch (requestError) {
-      setError(requestError.message)
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  // Google Sign-In button: rendered by Google Identity Services script
-  // The container must exist in DOM before Google script tries to render the button
   const googleContainer = <div id="google-container" style={{ marginTop: '12px' }} />
 
   async function submit(event) {
@@ -407,7 +423,7 @@ function App() {
       <div className="page-content">
         <div className="page-heading"><div><div className="eyebrow">{shop.name.toUpperCase()}</div><h1>{pageTitle[0]}{page === 'dashboard' && <span className="heading-dot">.</span>}</h1><p>{pageTitle[1]}</p></div>{page === 'inventory' && <button className="button button-primary" onClick={() => setDialog({ type: 'item' })}><Plus size={16} /> Add item</button>}{page === 'expenses' && isOwner && <button className="button button-primary" onClick={() => setDialog({ type: 'expense' })}><Plus size={16} /> Add expense</button>}</div>
         {error && <div className="alert-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setError('')}><X size={15} /></button></div>}
-        {page === 'dashboard' && isOwner && <Dashboard dashboard={data.dashboard} currency={shop.currency} today={currentDate} onGo={setPage} />}
+        {page === 'dashboard' && isOwner && <Dashboard dashboard={data.dashboard} currency={shop.currency} onGo={setPage} />}
         {page === 'inventory' && <><Inventory items={filteredItems} currency={shop.currency} isOwner={isOwner} query={query} setQuery={setQuery} onAdd={() => setDialog({ type: 'item' })} onEdit={(item) => setDialog({ type: 'item', item })} onDelete={(item) => setDialog({ type: 'delete-item', item })} /><InventoryUnitTools items={data.items} onAddStock={(item) => setDialog({ type: 'add-stock', item })} onDefineUnits={(item) => setDialog({ type: 'unit-profile', item, firstSetup: true })} onEdit={(item) => setDialog({ type: 'item', item })} isOwner={isOwner} /></>}
         {page === 'sales' && <Sales key={salesVersion} items={data.items} sales={data.sales} currency={shop.currency} isOwner={isOwner} onSell={async (items) => {
           try { await perform('/sales', { method: 'POST', body: JSON.stringify({ items }) }); await refresh(); setSalesVersion((version) => version + 1); setNotice('Sale recorded and stock updated'); return true }
@@ -442,7 +458,7 @@ function PasswordSetup({ onSubmit, error, busy, signOut }) {
   return <main className="setup-screen"><div className="setup-top"><div className="brand-lockup"><span className="brand-mark"><ShoppingBag size={20} /></span><span>ledger<span className="brand-dot">.</span></span></div><button className="text-button" onClick={signOut}>Sign out <LogOut size={15} /></button></div><div className="setup-card"><span className="setup-illustration"><ShieldCheck size={25} /></span><div className="eyebrow">ACCOUNT SECURITY</div><h1>Choose a new password</h1><p>Your owner gave you a temporary password. Set a personal password to continue.</p><form className="stack-form" onSubmit={(event) => { event.preventDefault(); if (password !== confirmation) { setLocalError('Passwords do not match'); return } setLocalError(''); onSubmit(password) }}><Field label="New password" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required /><Field label="Confirm new password" type="password" autoComplete="new-password" placeholder="Enter it again" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={8} required />{(localError || error) && <p className="form-error" role="alert">{localError || error}</p>}<button className="button button-primary button-wide" disabled={busy}>{busy ? 'Updating…' : 'Save new password'}<ArrowRight size={16} /></button></form></div><div className="setup-caption"><ShieldCheck size={15} /> Your password is securely encrypted.</div></main>
 }
 
-  function Dashboard({ dashboard, currency, onGo, today }) {
+  function Dashboard({ dashboard, currency, onGo }) {
   const stats = dashboard || {}
   return <div className="dashboard-grid">
     <section className="metric-grid"><Metric label="Total revenue" value={formatMoney(stats.revenue, currency)} detail={`${stats.sale_count || 0} completed sales`} icon={TrendingUp} tone="green" /><Metric label="Net profit" value={formatMoney(stats.net_profit, currency)} detail={`After ${formatMoney(stats.expenses, currency)} in expenses`} icon={ArrowDownLeft} tone="coral" /><Metric label="Inventory value" value={formatMoney(stats.inventory_value, currency)} detail={`${stats.item_count || 0} active items`} icon={Package} tone="blue" /><Metric label="Gross profit" value={formatMoney(stats.gross_profit, currency)} detail="Before operating expenses" icon={BarChart3} tone="gold" /></section>
@@ -663,13 +679,11 @@ function Team({ employees, onAdd, onToggle, onReset, onRemove }) {
 
 function ActionDialog({ dialog, currency, busy, error, onClose, onSubmit }) {
   const { type } = dialog
-  let title = 'Add item'
-  let action = 'Add item'
-  let endpoint = '/items'
+  let title = 'Add expense'
+  let action = 'Save expense'
+  let endpoint = '/expenses'
   let method = 'POST'
-  let message = 'Item added to inventory'
-  if (type === 'item' && dialog.item) { title = 'Edit item'; action = 'Save changes'; endpoint = `/items/${dialog.item.id}`; method = 'PATCH'; message = 'Item updated' }
-  if (type === 'expense') { title = 'Add expense'; action = 'Save expense'; endpoint = '/expenses'; message = 'Expense recorded' }
+  let message = 'Expense recorded'
   if (type === 'employee') { title = 'Add employee'; action = 'Add to team'; endpoint = '/team'; message = 'Employee added. They’ll need to change their password on first sign-in.' }
   if (type === 'reset-password') { title = 'Reset password'; action = 'Set temporary password'; endpoint = `/team/${dialog.employee.id}/reset-password`; message = 'Temporary password set. Share it with the employee.' }
   if (type === 'delete-item' || type === 'remove-employee') {
@@ -681,22 +695,17 @@ function ActionDialog({ dialog, currency, busy, error, onClose, onSubmit }) {
     message = removingEmployee ? 'Employee removed' : 'Item deleted'
   }
   const confirmOnly = type === 'delete-item' || type === 'remove-employee'
-  const start = dialog.item || {}
-  const [fields, setFields] = useState({ name: start.name || '', sku: start.sku || '', quantity: start.quantity ?? '', price: start.price ?? '', cost: start.cost ?? '', description: '', amount: '', email: dialog.employee?.email || '', temporary_password: '' })
-  const [localError, setLocalError] = useState('')
+  const [fields, setFields] = useState({ description: '', amount: '', email: dialog.employee?.email || '', temporary_password: '' })
   function submit(event) {
     event.preventDefault()
     const body = type === 'expense'
       ? { description: fields.description, amount: Number(fields.amount) }
       : type === 'employee'
         ? { email: fields.email, temporary_password: fields.temporary_password }
-        : type === 'reset-password'
-          ? { temporary_password: fields.temporary_password }
-          : { name: fields.name, sku: fields.sku, quantity: Number(fields.quantity), price: Number(fields.price), cost: Number(fields.cost) }
-    if (type === 'item' && Number(body.price) < Number(body.cost)) setLocalError('Selling price is below the item cost. You can still save if intentional.')
+        : { temporary_password: fields.temporary_password }
     onSubmit(endpoint, { method, ...(confirmOnly ? {} : { body: JSON.stringify(body) }) }, message)
   }
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title"><div className="dialog-heading"><div><span className="eyebrow">{type === 'employee' || type === 'reset-password' || type === 'remove-employee' ? 'TEAM ACCESS' : 'SHOP RECORDS'}</span><h2 id="dialog-title">{title}</h2></div><button className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={17} /></button></div>{confirmOnly ? <><p className="dialog-copy">{type === 'remove-employee' ? <>Remove <strong>{dialog.employee.email}</strong> from this shop? They will lose access immediately. Past sales will remain in your records.</> : <>Delete <strong>{dialog.item.name}</strong> from your inventory? This can’t be undone.</>}</p>{error && <p className="form-error" role="alert">{error}</p>}<div className="dialog-actions"><button className="button button-quiet" onClick={onClose}>Cancel</button><button className="button button-danger" disabled={busy} onClick={() => onSubmit(endpoint, { method }, message)}>{action}</button></div></> : <form className="dialog-form" onSubmit={submit}>{type === 'item' && <><Field label="Item name" placeholder="e.g. Ground coffee" value={fields.name} onChange={(event) => setFields({ ...fields, name: event.target.value })} required /><Field label="SKU" placeholder="e.g. COF-001" value={fields.sku} onChange={(event) => setFields({ ...fields, sku: event.target.value })} required /><div className="field-row"><Field label="Quantity" type="number" min="0" step="1" placeholder="0" value={fields.quantity} onChange={(event) => setFields({ ...fields, quantity: event.target.value })} required /><Field label={`Price (${currency})`} type="number" min="0" step="0.01" placeholder="0.00" value={fields.price} onChange={(event) => setFields({ ...fields, price: event.target.value })} required /></div><Field label={`Unit cost (${currency})`} type="number" min="0" step="0.01" placeholder="0.00" value={fields.cost} onChange={(event) => setFields({ ...fields, cost: event.target.value })} required />{localError && <p className="form-hint">{localError}</p>}</>}{type === 'expense' && <><Field label="Description" placeholder="e.g. Shop rent" value={fields.description} onChange={(event) => setFields({ ...fields, description: event.target.value })} required /><Field label={`Amount (${currency})`} type="number" min="0.01" step="0.01" placeholder="0.00" value={fields.amount} onChange={(event) => setFields({ ...fields, amount: event.target.value })} required /></>}{type === 'employee' && <><Field label="Employee email" type="email" placeholder="colleague@yourshop.com" value={fields.email} onChange={(event) => setFields({ ...fields, email: event.target.value })} required /><Field label="Temporary password" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={fields.temporary_password} onChange={(event) => setFields({ ...fields, temporary_password: event.target.value })} minLength={8} required /><p className="dialog-hint">They’ll be asked to change this password the first time they sign in.</p></>}{type === 'reset-password' && <><p className="dialog-copy reset-copy">Set a temporary password for <strong>{dialog.employee.email}</strong>.</p><Field label="Temporary password" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={fields.temporary_password} onChange={(event) => setFields({ ...fields, temporary_password: event.target.value })} minLength={8} required /><p className="dialog-hint">The employee must choose a new password at their next sign-in.</p></>}{error && <p className="form-error" role="alert">{error}</p>}<div className="dialog-actions"><button className="button button-quiet" type="button" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : action}<ArrowRight size={15} /></button></div></form>}</section></div>
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title"><div className="dialog-heading"><div><span className="eyebrow">{type === 'employee' || type === 'reset-password' || type === 'remove-employee' ? 'TEAM ACCESS' : 'SHOP RECORDS'}</span><h2 id="dialog-title">{title}</h2></div><button className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={17} /></button></div>{confirmOnly ? <><p className="dialog-copy">{type === 'remove-employee' ? <>Remove <strong>{dialog.employee.email}</strong> from this shop? They will lose access immediately. Past sales will remain in your records.</> : <>Delete <strong>{dialog.item.name}</strong> from your inventory? This can’t be undone.</>}</p>{error && <p className="form-error" role="alert">{error}</p>}<div className="dialog-actions"><button className="button button-quiet" onClick={onClose}>Cancel</button><button className="button button-danger" disabled={busy} onClick={() => onSubmit(endpoint, { method }, message)}>{action}</button></div></> : <form className="dialog-form" onSubmit={submit}>{type === 'expense' && <><Field label="Description" placeholder="e.g. Shop rent" value={fields.description} onChange={(event) => setFields({ ...fields, description: event.target.value })} required /><Field label={`Amount (${currency})`} type="number" min="0.01" step="0.01" placeholder="0.00" value={fields.amount} onChange={(event) => setFields({ ...fields, amount: event.target.value })} required /></>}{type === 'employee' && <><Field label="Employee email" type="email" placeholder="colleague@yourshop.com" value={fields.email} onChange={(event) => setFields({ ...fields, email: event.target.value })} required /><Field label="Temporary password" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={fields.temporary_password} onChange={(event) => setFields({ ...fields, temporary_password: event.target.value })} minLength={8} required /><p className="dialog-hint">They’ll be asked to change this password the first time they sign in.</p></>}{type === 'reset-password' && <><p className="dialog-copy reset-copy">Set a temporary password for <strong>{dialog.employee.email}</strong>.</p><Field label="Temporary password" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={fields.temporary_password} onChange={(event) => setFields({ ...fields, temporary_password: event.target.value })} minLength={8} required /><p className="dialog-hint">The employee must choose a new password at their next sign-in.</p></>}{error && <p className="form-error" role="alert">{error}</p>}<div className="dialog-actions"><button className="button button-quiet" type="button" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={busy}>{busy ? 'Saving…' : action}<ArrowRight size={15} /></button></div></form>}</section></div>
 }
 
 function EmptyState({ icon: Icon, title, text, action, onAction }) {

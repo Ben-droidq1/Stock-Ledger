@@ -20,9 +20,11 @@ Set a unique `JWT_SECRET` in `.env` before deploying. Production startup refuses
 - Owners can manage inventory, sales, expenses, reports, and employee access.
 - Employees can view inventory and record sales. They cannot access costs, profit figures, expenses, reports, or owner controls.
 - Employee accounts start with an owner-issued temporary password and must change it at first sign-in.
-- Login attempts are rate-limited, passwords use bcrypt, and API sessions use 15-minute JWTs.
+- Login attempts are rate-limited, passwords use bcrypt, and API sessions use 7-day JWTs.
 - API data queries use the shop selected in the authenticated JWT and verify an active membership on every request; client-supplied shop IDs are never trusted as the data scope.
 
 ## Production notes
 
-Use HTTPS, set a high-entropy `JWT_SECRET`, and configure a persistent writable SQLite path. For multiple API instances or high write volume, move the database and login rate-limit store to shared infrastructure. JWTs are held in browser local storage and expire after 15 minutes; users sign in again when a token expires.
+Use HTTPS, set a high-entropy `JWT_SECRET`, and configure a persistent writable SQLite path. For multiple API instances or high write volume, move the database and login rate-limit store to shared infrastructure. JWTs are held in browser local storage and expire after 7 days; users sign in again when a token expires.
+
+Set `GOOGLE_CLIENT_ID` (the same OAuth client ID used by the frontend) so the Google sign-in button appears and ID tokens validate.
