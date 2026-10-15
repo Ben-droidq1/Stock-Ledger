@@ -2,8 +2,8 @@
 
 :root {
   font-family: 'Inter', 'Segoe UI', sans-serif;
-  color: #34443a;
-  background: #f5f6f2;
+  color: var(--text, #34443a);
+  background: var(--bg, #f5f6f2);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -19,7 +19,7 @@
 html {
   min-width: 320px;
   min-height: 100%;
-  background: #f5f6f2;
+  background: var(--bg, #f5f6f2);
   letter-spacing: 0;
 }
 
@@ -42,8 +42,8 @@ summary:focus-visible {
 }
 
 ::selection {
-  color: #173e35;
-  background: #d2e5d3;
+  color: var(--text-strong, #173e35);
+  background: var(--surface-2, #d2e5d3);
 }
 
 #root {

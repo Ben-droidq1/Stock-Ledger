@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   ArrowDownLeft, ArrowRight, BarChart3, Boxes, BriefcaseBusiness, Check, ChevronDown, CircleHelp,
-  Clock3, CreditCard, LayoutDashboard, LogOut, Menu, MoreHorizontal, Package,
-  Plus, Ruler, Search, Settings2, ShieldCheck, ShoppingBag, ShoppingCart, TrendingUp,
+  Clock3, CreditCard, LayoutDashboard, LogOut, Menu, Moon, MoreHorizontal, Package,
+  Plus, Ruler, Search, Settings2, ShieldCheck, ShoppingBag, ShoppingCart, Sun, TrendingUp,
   UserPlus, Users, X,
 } from 'lucide-react'
 import UnitConversionEditor from './UnitConversionEditor.jsx'
@@ -60,7 +60,41 @@ function Field({ label, ...props }) {
   return <label className="field"><span>{label}</span><input {...props} /></label>
 }
 
-function AuthScreen({ onAuth, busy, error, setError }) {
+function useTheme() {
+  const [theme, setTheme] = useState(() => {
+    const stored = localStorage.getItem('ledger_theme')
+    return stored === 'dark' ? 'dark' : 'light'
+  })
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('ledger_theme', theme)
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#0e1512' : '#173e35')
+  }, [theme])
+
+  return [theme, () => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))]
+}
+
+function ThemeToggle({ theme, onToggle, className = '' }) {
+  const dark = theme === 'dark'
+  return <button
+    type="button"
+    role="switch"
+    aria-checked={dark}
+    aria-label={dark ? 'Switch to light appearance' : 'Switch to dark appearance'}
+    title={dark ? 'Light mode' : 'Dark mode'}
+    className={className ? `theme-toggle ${className}` : 'theme-toggle'}
+    onClick={onToggle}
+  >
+    <span className="theme-toggle-track" aria-hidden="true">
+      <Sun className="theme-toggle-sun" size={13} />
+      <Moon className="theme-toggle-moon" size={13} />
+      <span className="theme-toggle-thumb" />
+    </span>
+  </button>
+}
+
+function AuthScreen({ onAuth, busy, error, setError, theme, onToggleTheme }) {
   const [mode, setMode] = useState('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -161,6 +195,7 @@ function AuthScreen({ onAuth, busy, error, setError }) {
   if (busy) return <div className="auth-loading"><span className="brand-mark"><ShoppingBag size={21} /></span></div>
 
   return <main className="auth-layout">
+    <ThemeToggle theme={theme} onToggle={onToggleTheme} className="theme-toggle-auth" />
     <section className="auth-side">
       <div className="brand-lockup"><span className="brand-mark"><ShoppingBag size={20} /></span><span>Stock <span className="brand-dot">Ledger.</span></span></div>
       <div className="auth-editorial">
@@ -192,6 +227,7 @@ function AuthScreen({ onAuth, busy, error, setError }) {
 }
 
 function App() {
+  const [theme, toggleTheme] = useTheme()
   const [token, setToken] = useState(() => localStorage.getItem('ledger_token'))
   const [user, setUser] = useState(null)
   const [shop, setShop] = useState(null)
@@ -357,7 +393,7 @@ function App() {
     setError('')
   }
 
-  if (!token || !user) return <AuthScreen onAuth={acceptAuth} busy={loading} error={error} setError={setError} />
+  if (!token || !user) return <AuthScreen onAuth={acceptAuth} busy={loading} error={error} setError={setError} theme={theme} onToggleTheme={toggleTheme} />
 
   if (user.must_change_password) return <PasswordSetup onSubmit={async (password) => {
     try {
@@ -365,9 +401,9 @@ function App() {
       setUser((current) => ({ ...current, must_change_password: false }))
       setNotice('Password updated')
     } catch { /* The form keeps the API error visible. */ }
-  }} error={error} busy={busy} signOut={signOut} />
+  }} error={error} busy={busy} signOut={signOut} theme={theme} onToggleTheme={toggleTheme} />
 
-  if ((!user.shop_id || !shop) && !user.is_admin) return <ShopSetup onCreate={createShop} error={error} busy={busy} signOut={signOut} />
+  if ((!user.shop_id || !shop) && !user.is_admin) return <ShopSetup onCreate={createShop} error={error} busy={busy} signOut={signOut} theme={theme} onToggleTheme={toggleTheme} />
 
   const pageTitle = {
     dashboard: [currentDate.getHours() < 12 ? 'Good morning' : currentDate.getHours() < 17 ? 'Good afternoon' : 'Good evening', 'A little overview of how things are moving.'],
@@ -424,7 +460,7 @@ function App() {
     </aside>
 
     <main className="main-area">
-      <header className="topbar"><div className="topbar-left"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={19} /></button><span className="crumb-muted">Workspace</span><span className="crumb-divider">/</span><span className="crumb-current">{pageTitle[0]}</span></div><div className="topbar-right"><span className="today-label"><Clock3 size={14} /> {currentDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</span><span className="top-avatar">{initials(user.email)}</span></div></header>
+      <header className="topbar"><div className="topbar-left"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={19} /></button><span className="crumb-muted">Workspace</span><span className="crumb-divider">/</span><span className="crumb-current">{pageTitle[0]}</span></div><div className="topbar-right"><ThemeToggle theme={theme} onToggle={toggleTheme} /><span className="today-label"><Clock3 size={14} /> {currentDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</span><span className="top-avatar">{initials(user.email)}</span></div></header>
       <div className="page-content">
         <div className="page-heading"><div><div className="eyebrow">{shop ? shop.name.toUpperCase() : 'SITE ADMINISTRATION'}</div><h1>{pageTitle[0]}{page === 'dashboard' && <span className="heading-dot">.</span>}</h1><p>{pageTitle[1]}</p></div>{page === 'inventory' && <button className="button button-primary" onClick={() => setDialog({ type: 'item' })}><Plus size={16} /> Add item</button>}{page === 'expenses' && isOwner && <button className="button button-primary" onClick={() => setDialog({ type: 'expense' })}><Plus size={16} /> Add expense</button>}</div>
         {error && <div className="alert-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setError('')}><X size={15} /></button></div>}
@@ -450,17 +486,17 @@ function App() {
   </div>
 }
 
-function ShopSetup({ onCreate, error, busy, signOut }) {
+function ShopSetup({ onCreate, error, busy, signOut, theme, onToggleTheme }) {
   const [name, setName] = useState('')
   const [currency, setCurrency] = useState('₦')
-  return <main className="setup-screen"><div className="setup-top"><div className="brand-lockup"><span className="brand-mark"><ShoppingBag size={20} /></span><span>ledger<span className="brand-dot">.</span></span></div><button className="text-button" onClick={signOut}>Sign out <LogOut size={15} /></button></div><div className="setup-card"><span className="setup-illustration"><ShoppingBag size={25} /></span><div className="eyebrow">ONE LAST THING</div><h1>Create your shop</h1><p>Give your workspace a name. You’ll be its owner, and can invite your team later.</p><form className="stack-form" onSubmit={(event) => { event.preventDefault(); onCreate(name, currency) }}><Field label="Shop name" placeholder="e.g. The Corner Store" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} required /><label className="field"><span>Currency</span><select value={currency} onChange={(event) => setCurrency(event.target.value)}><option value="₦">₦ &nbsp; Nigerian naira</option><option value="$">$ &nbsp; US dollar</option><option value="£">£ &nbsp; Pound sterling</option><option value="€">€ &nbsp; Euro</option><option value="GH₵">GH₵ &nbsp; Ghanaian cedi</option><option value="KSh">KSh &nbsp; Kenyan shilling</option></select></label>{error && <p className="form-error" role="alert">{error}</p>}<button className="button button-primary button-wide" disabled={busy}>{busy ? 'Creating your shop…' : 'Create shop'}<ArrowRight size={16} /></button></form></div><div className="setup-caption"><ShieldCheck size={15} /> Your data belongs to your shop. You control who can see it.</div></main>
+  return <main className="setup-screen"><div className="setup-top"><div className="brand-lockup"><span className="brand-mark"><ShoppingBag size={20} /></span><span>ledger<span className="brand-dot">.</span></span></div><div className="setup-actions"><ThemeToggle theme={theme} onToggle={onToggleTheme} /><button className="text-button" onClick={signOut}>Sign out <LogOut size={15} /></button></div></div><div className="setup-card"><span className="setup-illustration"><ShoppingBag size={25} /></span><div className="eyebrow">ONE LAST THING</div><h1>Create your shop</h1><p>Give your workspace a name. You’ll be its owner, and can invite your team later.</p><form className="stack-form" onSubmit={(event) => { event.preventDefault(); onCreate(name, currency) }}><Field label="Shop name" placeholder="e.g. The Corner Store" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} required /><label className="field"><span>Currency</span><select value={currency} onChange={(event) => setCurrency(event.target.value)}><option value="₦">₦ &nbsp; Nigerian naira</option><option value="$">$ &nbsp; US dollar</option><option value="£">£ &nbsp; Pound sterling</option><option value="€">€ &nbsp; Euro</option><option value="GH₵">GH₵ &nbsp; Ghanaian cedi</option><option value="KSh">KSh &nbsp; Kenyan shilling</option></select></label>{error && <p className="form-error" role="alert">{error}</p>}<button className="button button-primary button-wide" disabled={busy}>{busy ? 'Creating your shop…' : 'Create shop'}<ArrowRight size={16} /></button></form></div><div className="setup-caption"><ShieldCheck size={15} /> Your data belongs to your shop. You control who can see it.</div></main>
 }
 
-function PasswordSetup({ onSubmit, error, busy, signOut }) {
+function PasswordSetup({ onSubmit, error, busy, signOut, theme, onToggleTheme }) {
   const [password, setPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [localError, setLocalError] = useState('')
-  return <main className="setup-screen"><div className="setup-top"><div className="brand-lockup"><span className="brand-mark"><ShoppingBag size={20} /></span><span>ledger<span className="brand-dot">.</span></span></div><button className="text-button" onClick={signOut}>Sign out <LogOut size={15} /></button></div><div className="setup-card"><span className="setup-illustration"><ShieldCheck size={25} /></span><div className="eyebrow">ACCOUNT SECURITY</div><h1>Choose a new password</h1><p>Your owner gave you a temporary password. Set a personal password to continue.</p><form className="stack-form" onSubmit={(event) => { event.preventDefault(); if (password !== confirmation) { setLocalError('Passwords do not match'); return } setLocalError(''); onSubmit(password) }}><Field label="New password" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required /><Field label="Confirm new password" type="password" autoComplete="new-password" placeholder="Enter it again" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={8} required />{(localError || error) && <p className="form-error" role="alert">{localError || error}</p>}<button className="button button-primary button-wide" disabled={busy}>{busy ? 'Updating…' : 'Save new password'}<ArrowRight size={16} /></button></form></div><div className="setup-caption"><ShieldCheck size={15} /> Your password is securely encrypted.</div></main>
+  return <main className="setup-screen"><div className="setup-top"><div className="brand-lockup"><span className="brand-mark"><ShoppingBag size={20} /></span><span>ledger<span className="brand-dot">.</span></span></div><div className="setup-actions"><ThemeToggle theme={theme} onToggle={onToggleTheme} /><button className="text-button" onClick={signOut}>Sign out <LogOut size={15} /></button></div></div><div className="setup-card"><span className="setup-illustration"><ShieldCheck size={25} /></span><div className="eyebrow">ACCOUNT SECURITY</div><h1>Choose a new password</h1><p>Your owner gave you a temporary password. Set a personal password to continue.</p><form className="stack-form" onSubmit={(event) => { event.preventDefault(); if (password !== confirmation) { setLocalError('Passwords do not match'); return } setLocalError(''); onSubmit(password) }}><Field label="New password" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required /><Field label="Confirm new password" type="password" autoComplete="new-password" placeholder="Enter it again" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={8} required />{(localError || error) && <p className="form-error" role="alert">{localError || error}</p>}<button className="button button-primary button-wide" disabled={busy}>{busy ? 'Updating…' : 'Save new password'}<ArrowRight size={16} /></button></form></div><div className="setup-caption"><ShieldCheck size={15} /> Your password is securely encrypted.</div></main>
 }
 
   function Dashboard({ dashboard, currency, onGo }) {
