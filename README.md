@@ -20,11 +20,13 @@ Set a unique `JWT_SECRET` in `.env` before deploying. Production startup refuses
 - Owners can manage inventory, sales, expenses, reports, and employee access.
 - Employees can view inventory and record sales. They cannot access costs, profit figures, expenses, reports, or owner controls.
 - Employee accounts start with an owner-issued temporary password and must change it at first sign-in.
-- Login attempts are rate-limited, passwords use bcrypt, and API sessions use 7-day JWTs.
+- Login and sign-up are rate-limited, passwords use bcrypt (and are never returned by the API), and API sessions use short-lived JWTs (default 1 day, override with `JWT_EXPIRES_IN`).
 - API data queries use the shop selected in the authenticated JWT and verify an active membership on every request; client-supplied shop IDs are never trusted as the data scope.
 
 ## Production notes
 
-Use HTTPS, set a high-entropy `JWT_SECRET`, and configure a persistent writable SQLite path. For multiple API instances or high write volume, move the database and login rate-limit store to shared infrastructure. JWTs are held in browser local storage and expire after 7 days; users sign in again when a token expires.
+Use HTTPS, set a high-entropy `JWT_SECRET` (at least 32 characters), and configure a persistent writable SQLite path. For multiple API instances or high write volume, move the database and login rate-limit store to shared infrastructure. JWTs are held in browser local storage and expire after `JWT_EXPIRES_IN` (default 1 day); users sign in again when a token expires.
+
+Set `ALLOWED_ORIGINS` to your real browser origin(s) (comma-separated, e.g. `https://stock-ledger-nu.vercel.app`) so the API only answers CORS preflights from that domain. Requests proxied through the frontend are same-origin, so this is defence in depth. Keep `NODE_ENV=production` so stack traces stay out of responses, HSTS is sent, and the built-in development secret is rejected. The server also sends `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and `Permissions-Policy` headers and hides `X-Powered-By`.
 
 Set `GOOGLE_CLIENT_ID` (the same OAuth client ID used by the frontend) so the Google sign-in button appears and ID tokens validate.

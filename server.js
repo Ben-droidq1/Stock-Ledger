@@ -11,8 +11,17 @@ import { convertQuantity, validateUnitEdges } from './src/unitConversions.js'
 
 const port = Number(process.env.API_PORT || 3001)
 const databasePath = process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'shops.sqlite')
-const jwtSecret = process.env.JWT_SECRET || 'local-development-secret-change-before-deploy'
+const isProduction = process.env.NODE_ENV === 'production'
+const developmentSecret = 'local-development-secret-change-before-deploy'
+const jwtSecret = process.env.JWT_SECRET || developmentSecret
+const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '1d'
 const googleClientId = process.env.GOOGLE_CLIENT_ID
+const allowedOrigins = new Set(
+  String(process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+)
 const adminEmails = new Set(
   String(process.env.ADMIN_EMAILS || '')
     .split(',')
@@ -23,10 +32,11 @@ const isAdminUser = (user) => Boolean(user && adminEmails.has(String(user.email 
 
 const googleClient = googleClientId ? new OAuth2Client(googleClientId) : null
 
-if (process.env.NODE_ENV === 'production' && (
+if (isProduction && (
   !process.env.JWT_SECRET ||
   process.env.JWT_SECRET.length < 32 ||
-  process.env.JWT_SECRET === 'replace-this-with-a-long-random-secret'
+  process.env.JWT_SECRET === 'replace-this-with-a-long-random-secret' ||
+  process.env.JWT_SECRET === developmentSecret
 )) {
   throw new Error('Set a unique JWT_SECRET of at least 32 characters in production')
 }
@@ -141,7 +151,36 @@ if (!userColumns.has('auth_provider')) db.exec("ALTER TABLE users ADD COLUMN aut
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_idx ON users(google_sub) WHERE google_sub IS NOT NULL')
 
 const app = express()
+app.disable('x-powered-by')
+app.set('trust proxy', 1)
 app.use(express.json({ limit: '32kb' }))
+
+// Baseline security headers + a restrictive CORS allow-list.
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-site')
+  if (isProduction) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains')
+  const origin = req.headers.origin
+  if (origin) res.setHeader('Vary', 'Origin')
+  if (origin && allowedOrigins.has(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Access-Control-Allow-Credentials', 'true')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+  }
+  if (req.method === 'OPTIONS') {
+    res.status(origin && !allowedOrigins.has(origin) ? 403 : 204).end()
+    return
+  }
+  if (isProduction && req.get('x-forwarded-proto') === 'http') {
+    res.redirect(308, `https://${req.get('host')}${req.originalUrl}`)
+    return
+  }
+  next()
+})
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -159,6 +198,10 @@ const requireText = (value, label, maxLength = 120) => {
   }
   return value.trim()
 }
+
+const MAX_QUANTITY = 1e9
+const MAX_MONEY = 1e12
+const isNumberInRange = (value, min, max) => Number.isFinite(value) && value >= min && value <= max
 
 const validEmail = (value) =>
   typeof value === 'string' && value.trim().length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
@@ -213,8 +256,8 @@ function readUnitProfile(userId, shopId, itemId) {
 }
 
 function storeUnitProfile(userId, shopId, itemId, profile) {
-  const existing = db.prepare('SELECT id FROM unit_profiles WHERE user_id = ? AND item_id = ?')
-    .get(userId, itemId)
+  const existing = db.prepare('SELECT id FROM unit_profiles WHERE user_id = ? AND shop_id = ? AND item_id = ?')
+    .get(userId, shopId, itemId)
   let profileId = existing?.id
   if (existing) {
     db.prepare(`
@@ -286,7 +329,11 @@ function resolveSessionUser(user) {
   return sessionUser
 }
 
-const issueToken = (user) => jwt.sign({ sub: user.id, shop_id: user.shop_id ?? null }, jwtSecret, { expiresIn: '7d' })
+const issueToken = (user) => jwt.sign(
+  { sub: user.id, shop_id: user.shop_id ?? null },
+  jwtSecret,
+  { algorithm: 'HS256', expiresIn: jwtExpiresIn },
+)
 
 async function verifyGoogleIdToken(idToken) {
   if (!googleClient || typeof idToken !== 'string') return null
@@ -307,11 +354,20 @@ async function verifyGoogleIdToken(idToken) {
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 10,
+  limit: Number(process.env.AUTH_RATE_LIMIT || 10),
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   message: { error: 'Too many attempts. Try again in 15 minutes.' },
 })
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 1000,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Slow down and try again shortly.' },
+})
+app.use('/api', apiLimiter)
 
 app.post('/api/auth/signup', loginLimiter, asyncRoute(async (req, res) => {
   const email = validEmail(req.body.email) ? req.body.email.trim().toLowerCase() : null
@@ -378,7 +434,7 @@ const authenticate = asyncRoute(async (req, res, next) => {
   if (!token) throw new HttpError(401, 'Sign in to continue')
   let payload
   try {
-    payload = jwt.verify(token, jwtSecret)
+    payload = jwt.verify(token, jwtSecret, { algorithms: ['HS256'] })
   } catch {
     throw new HttpError(401, 'Your session has expired. Sign in again.')
   }
@@ -397,7 +453,7 @@ const requireShop = (req, res, next) => {
 }
 
 const requireOwner = (req, res, next) => {
-  if (req.user.role !== 'owner') return next(new HttpError(403, 'Owner access required'))
+  if (!req.user.shop_id || req.user.role !== 'owner') return next(new HttpError(403, 'Owner access required'))
   next()
 }
 
@@ -519,7 +575,7 @@ app.post('/api/items', requireShop, (req, res) => {
   const quantity = Number(req.body.quantity)
   const price = Number(req.body.price)
   const cost = req.user.role === 'owner' ? Number(req.body.cost) : 0
-  if (!Number.isFinite(quantity) || quantity < 0 || !Number.isFinite(price) || price < 0 || !Number.isFinite(cost) || cost < 0) {
+  if (!isNumberInRange(quantity, 0, MAX_QUANTITY) || !isNumberInRange(price, 0, MAX_MONEY) || !isNumberInRange(cost, 0, MAX_MONEY)) {
     throw new HttpError(400, 'Enter a valid quantity and price')
   }
   const profile = req.body.unit_profile ? parseUnitProfile(req.body.unit_profile) : null
@@ -554,7 +610,7 @@ app.patch('/api/items/:id', requireShop, (req, res) => {
   const cost = req.user.role === 'owner'
     ? (req.body.cost === undefined ? existing.cost : Number(req.body.cost))
     : existing.cost
-  if (!Number.isFinite(quantity) || quantity < 0 || !Number.isFinite(price) || price < 0 || !Number.isFinite(cost) || cost < 0) {
+  if (!isNumberInRange(quantity, 0, MAX_QUANTITY) || !isNumberInRange(price, 0, MAX_MONEY) || !isNumberInRange(cost, 0, MAX_MONEY)) {
     throw new HttpError(400, 'Enter a valid quantity and price')
   }
   const profile = readUnitProfile(req.user.id, req.user.shop_id, req.params.id)
@@ -576,7 +632,7 @@ app.post('/api/items/:id/stock', requireShop, (req, res) => {
     .get(req.params.id, req.user.shop_id)
   if (!item) throw new HttpError(404, 'Item not found')
   const quantity = Number(req.body.quantity)
-  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, 'Enter a positive stock quantity')
+  if (!Number.isFinite(quantity) || quantity <= 0 || quantity > MAX_QUANTITY) throw new HttpError(400, 'Enter a positive stock quantity')
   const profile = readUnitProfile(req.user.id, req.user.shop_id, item.id)
   const quantityInBase = convertEntryQuantity(quantity, req.body.unit || item.stock_unit, profile, item.stock_unit)
   db.prepare('UPDATE items SET quantity = quantity + ? WHERE id = ? AND shop_id = ?')
@@ -608,7 +664,7 @@ app.put('/api/unit-conversions/:itemId', requireShop, (req, res) => {
   if (!existingProfile && item.stock_unit === 'unit' && item.quantity > 0 && openingQuantity === null) {
     throw new HttpError(409, 'Enter the current stock quantity and unit to set up this product’s first conversion profile')
   }
-  if (openingQuantity !== null && (!Number.isFinite(openingQuantity) || openingQuantity < 0)) {
+  if (openingQuantity !== null && !isNumberInRange(openingQuantity, 0, MAX_QUANTITY)) {
     throw new HttpError(400, 'Current stock must be a non-negative number')
   }
   const rebasedQuantity = openingQuantity === null
@@ -638,7 +694,7 @@ app.post('/api/sales', requireShop, (req, res) => {
     for (const line of lines) {
       const itemId = Number(line.item_id)
       const quantity = Number(line.quantity)
-      if (!Number.isInteger(itemId) || !Number.isInteger(quantity) || quantity <= 0) throw new HttpError(400, 'Sale quantities must be whole numbers')
+      if (!Number.isInteger(itemId) || !Number.isInteger(quantity) || quantity <= 0 || quantity > MAX_QUANTITY) throw new HttpError(400, 'Sale quantities must be whole numbers')
       normalized.set(itemId, (normalized.get(itemId) || 0) + quantity)
     }
     const products = [...normalized].map(([itemId, quantity]) => {
@@ -688,7 +744,7 @@ app.get('/api/expenses', requireShop, requireOwner, (req, res) => {
 app.post('/api/expenses', requireShop, requireOwner, (req, res) => {
   const description = requireText(req.body.description, 'Description', 140)
   const amount = Number(req.body.amount)
-  if (!Number.isFinite(amount) || amount <= 0) throw new HttpError(400, 'Enter a valid expense amount')
+  if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_MONEY) throw new HttpError(400, 'Enter a valid expense amount')
   const result = db.prepare('INSERT INTO expenses (shop_id, created_by, description, amount) VALUES (?, ?, ?, ?)')
     .run(req.user.shop_id, req.user.id, description, amount)
   res.status(201).json({ expense: db.prepare('SELECT id, description, amount, created_at FROM expenses WHERE id = ? AND shop_id = ?')
