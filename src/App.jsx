@@ -20,8 +20,9 @@ async function apiRequest(token, path, options = {}) {
     },
   })
   if (response.status === 204) return null
-  const data = await response.json()
-  if (!response.ok) throw new Error(data.error || 'Something went wrong')
+  const data = await response.json().catch(() => null)
+  if (!response.ok) throw new Error(data?.error || `Request failed (${response.status})`)
+  if (data === null) throw new Error('The server returned an unexpected response')
   return data
 }
 
@@ -90,7 +91,7 @@ function AuthScreen({ onAuth, busy, error, setError }) {
       if (!idToken) return
       setSubmitting(true)
       try {
-        const result = await apiRequest(null, 'auth/google', {
+        const result = await apiRequest(null, '/auth/google', {
           method: 'POST',
           body: JSON.stringify({ idToken }),
         })
